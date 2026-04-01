@@ -747,7 +747,7 @@ def setup_spinningBodiesNDOF():
         spinningBody.setC(8)
         spinningBodyEffector.addSpinningBody(spinningBody)
         r_ScB_B += dcm_SB.transpose() @ spinningBody.getR_SP_P()
-        dcm_SB = rbk.PRV2C(spinningBody.getThetaInit() * np.array(spinningBody.getSHat_S())) @ spinningBody.getDCM_S0P() @ dcm_SB
+        dcm_SB = rbk.PRV2C(spinningBody.getThetaInit() * np.array(spinningBody.getSHat_S()).squeeze()) @ spinningBody.getDCM_S0P() @ dcm_SB
 
         spinningBody = spinningBodyNDOFStateEffector.SpinningBody()
         spinningBody.setMass(massSubPanel)
@@ -765,7 +765,7 @@ def setup_spinningBodiesNDOF():
         spinningBody.setK(1)
         spinningBody.setC(0.8)
         spinningBodyEffector.addSpinningBody(spinningBody)
-        dcm_SB = rbk.PRV2C(spinningBody.getThetaInit() * np.array(spinningBody.getSHat_S())) @ spinningBody.getDCM_S0P() @ dcm_SB
+        dcm_SB = rbk.PRV2C(spinningBody.getThetaInit() * np.array(spinningBody.getSHat_S()).squeeze()) @ spinningBody.getDCM_S0P() @ dcm_SB
 
         # Compute COM offset contribution, to be divided by the hub mass
         mr_ScB_B -= spinningBody.getMass() * (r_ScB_B + dcm_SB.transpose() @ spinningBody.getR_ScS_S())
