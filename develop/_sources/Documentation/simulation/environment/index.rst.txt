@@ -28,6 +28,7 @@ environment
    magneticFieldWMM/index
    planetEphemeris/index
    solarFlux/index
+   spaceWeatherData/index
    spacecraftChargingEquilibrium/index
    spacecraftLocation/index
    spiceInterface/index
