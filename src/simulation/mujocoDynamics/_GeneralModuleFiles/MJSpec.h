@@ -41,11 +41,11 @@ using Vector6d = Eigen::Matrix<double, 6, 1>;
  */
 struct MJGeomInfo {
     std::string bodyName; ///< Name of the body this geom belongs to.
-    int type;             ///< MuJoCo geom type (e.g. mjGEOM_BOX=6, mjGEOM_SPHERE=2, mjGEOM_CYLINDER=5, etc.).
-    std::vector<double> size;  ///< Size parameters (3 elements).
-    std::vector<double> pos;   ///< Position in body frame (3 elements).
-    std::vector<double> quat;  ///< Quaternion in body frame (4 elements: w, x, y, z).
-    std::vector<double> rgba;  ///< Color (4 elements, 0-1 range).
+    int type = mjGEOM_NONE; ///< MuJoCo geom type (e.g. mjGEOM_BOX=6, mjGEOM_SPHERE=2, mjGEOM_CYLINDER=5, etc.).
+    std::vector<double> size = std::vector<double>(3);  ///< Size parameters (3 elements).
+    std::vector<double> pos  = std::vector<double>(3);  ///< Position in body frame (3 elements).
+    std::vector<double> quat = std::vector<double>(4);  ///< Quaternion in body frame (4 elements: w, x, y, z).
+    std::vector<double> rgba = std::vector<double>(4);  ///< Color (4 elements, 0-1 range).
 };
 
 class MJScene;

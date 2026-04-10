@@ -30,16 +30,6 @@ from typing import List
 %template() std::vector<std::string>;
 %template() std::vector<double>;
 
-struct MJGeomInfo {
-    std::string bodyName;
-    int type;
-    std::vector<double> size;
-    std::vector<double> pos;
-    std::vector<double> quat;
-    std::vector<double> rgba;
-};
-%template(MJGeomInfoVector) std::vector<MJGeomInfo>;
-
 %include "simulation/dynamics/_GeneralModuleFiles/dynParamManager.i"
 %include "simulation/dynamics/_GeneralModuleFiles/dynamicObject.h"
 
@@ -72,5 +62,6 @@ struct MJGeomInfo {
 }
 
 %include "MJScene.h"
+%template(MJGeomInfoVector) std::vector<MJGeomInfo>;
 
 %include "architecture/msgPayloadDefCpp/MJSceneStateMsgPayload.h"
