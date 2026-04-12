@@ -219,9 +219,11 @@ std::vector<std::string> MJSpec::getBodyNames() const
 std::string MJSpec::getBodyParentName(const std::string& bodyName) const
 {
     int bodyId = mj_name2id(this->model.get(), mjOBJ_BODY, bodyName.c_str());
-    if (bodyId <= 0) return "";
+    if (bodyId < 0) {
+        MJBasilisk::detail::logAndThrow("Tried to get parent of unknown body '" + bodyName + "'.");
+    }
     int parentId = this->model->body_parentid[bodyId];
-    if (parentId == 0) return "";
+    if (parentId == 0) return "world";
     return std::string(this->model->names + this->model->name_bodyadr[parentId]);
 }
 

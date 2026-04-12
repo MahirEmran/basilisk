@@ -1158,10 +1158,10 @@ def _handleMJScene(viz, sc):
     """Register all MJScene bodies with the vizInterface messenger."""
     bodyNames = sc.getBodyNames()
 
-    freeBodyNames = [name for name in bodyNames if sc.getBody(name).isFree()]
+    freeBodyNames = [name for name in bodyNames if sc.getBodyParentName(name) == "world"]
     if not freeBodyNames:
         raise ValueError(
-            "MJScene has no free body. Cannot determine the hub spacecraft."
+            "MJScene has no top-level body. Cannot determine the hub spacecraft."
         )
 
     for hubName in freeBodyNames:
@@ -1175,7 +1175,7 @@ def _handleMJScene(viz, sc):
             continue
         scData = vizInterface.VizSpacecraftData()
         scData.spacecraftName = name
-        scData.parentSpacecraftName = sc.getBodyParentName(name) or freeBodyNames[0]
+        scData.parentSpacecraftName = sc.getBodyParentName(name)
         scData.scStateInMsg.subscribeTo(sc.getBody(name).getOrigin().stateOutMsg)
         viz.scData.push_back(scData)
 
