@@ -340,6 +340,59 @@
                 <span class="kc">False</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="p">)</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">_closeQueue</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_closeQueue</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Close a multiprocessing queue and wait for its feeder thread.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    resultQueue : multiprocessing.Queue</span>
+<span class="sd">        Queue to close after all expected data has been read or written.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">resultQueue</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">OSError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+        <span class="k">pass</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">resultQueue</span><span class="o">.</span><span class="n">join_thread</span><span class="p">()</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">AssertionError</span><span class="p">,</span> <span class="ne">OSError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_closeProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Release multiprocessing process resources after the process exits.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    testProcess : multiprocessing.Process</span>
+<span class="sd">        Process object to close after it has been joined.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">OSError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_terminateProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Stop a multiprocessing process and wait for shutdown.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    testProcess : multiprocessing.Process</span>
+<span class="sd">        Process object to terminate.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">testProcess</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+    <span class="n">shutdownTimeout</span> <span class="o">=</span> <span class="mi">1</span>  <span class="c1"># [s]</span>
+    <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">shutdownTimeout</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">testProcess</span><span class="o">.</span><span class="n">pid</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">shutdownTimeout</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="testSpiceThreadSafety">
@@ -370,34 +423,37 @@
         <span class="n">target</span><span class="o">=</span><span class="n">_runTestWithTimeout</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">,</span> <span class="n">numWorkers</span><span class="p">,</span> <span class="n">iterationsPerWorker</span><span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">testProcess</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
-
-    <span class="n">timeoutSeconds</span> <span class="o">=</span> <span class="mi">60</span>
-    <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">timeoutSeconds</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
-        <span class="c1"># Hard timeout: kill the worker process and fail the test</span>
-        <span class="n">testProcess</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
-        <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">testProcess</span><span class="o">.</span><span class="n">pid</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
-        <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Thread safety test timed out after </span><span class="si">{</span><span class="n">timeoutSeconds</span><span class="si">}</span><span class="s2"> seconds&quot;</span><span class="p">)</span>
-
     <span class="k">try</span><span class="p">:</span>
-        <span class="n">results</span><span class="p">,</span> <span class="n">success</span> <span class="o">=</span> <span class="n">resultQueue</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
 
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;error&quot;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+        <span class="n">timeoutSeconds</span> <span class="o">=</span> <span class="mi">60</span>  <span class="c1"># [s]</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">timeoutSeconds</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
+            <span class="c1"># Hard timeout: kill the worker process and fail the test</span>
+            <span class="n">_terminateProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">)</span>
             <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span>
-                <span class="s2">&quot;Thread safety test failed with error: &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">]</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;traceback&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Thread safety test timed out after </span><span class="si">{</span><span class="n">timeoutSeconds</span><span class="si">}</span><span class="s2"> seconds&quot;</span>
             <span class="p">)</span>
 
-        <span class="k">assert</span> <span class="n">success</span><span class="p">,</span> <span class="s2">&quot;Thread safety test reported thread-safety issues&quot;</span>
-        <span class="k">assert</span> <span class="n">results</span><span class="p">[</span><span class="s2">&quot;failedIterations&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span>
-            <span class="s2">&quot;Some iterations failed in the thread-safety test&quot;</span>
-        <span class="p">)</span>
-    <span class="k">except</span> <span class="n">queue</span><span class="o">.</span><span class="n">Empty</span><span class="p">:</span>
-        <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Thread safety test completed but did not return any results&quot;</span><span class="p">)</span></div>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">,</span> <span class="n">success</span> <span class="o">=</span> <span class="n">resultQueue</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;error&quot;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+                <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span>
+                    <span class="s2">&quot;Thread safety test failed with error: &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">]</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;traceback&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+
+            <span class="k">assert</span> <span class="n">success</span><span class="p">,</span> <span class="s2">&quot;Thread safety test reported thread-safety issues&quot;</span>
+            <span class="k">assert</span> <span class="n">results</span><span class="p">[</span><span class="s2">&quot;failedIterations&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span>
+                <span class="s2">&quot;Some iterations failed in the thread-safety test&quot;</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="n">queue</span><span class="o">.</span><span class="n">Empty</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Thread safety test completed but did not return any results&quot;</span><span class="p">)</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">_closeQueue</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">)</span>
+        <span class="n">_closeProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">)</span></div>
 
 
 
@@ -418,31 +474,32 @@
         <span class="n">target</span><span class="o">=</span><span class="n">_runTestWithTimeout</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">,</span> <span class="n">numWorkers</span><span class="p">,</span> <span class="n">iterationsPerWorker</span><span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">testProcess</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
-
-    <span class="n">timeoutSeconds</span> <span class="o">=</span> <span class="mi">60</span>
-    <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">timeoutSeconds</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
-        <span class="n">testProcess</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
-        <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">testProcess</span><span class="o">.</span><span class="n">pid</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ERROR: Thread safety test timed out after </span><span class="si">{</span><span class="n">timeoutSeconds</span><span class="si">}</span><span class="s2"> seconds&quot;</span><span class="p">)</span>
-        <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
-
     <span class="k">try</span><span class="p">:</span>
-        <span class="n">results</span><span class="p">,</span> <span class="n">success</span> <span class="o">=</span> <span class="n">resultQueue</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
 
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;error&quot;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ERROR: Thread safety test failed with error: </span><span class="si">{</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-            <span class="nb">print</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;traceback&quot;</span><span class="p">))</span>
+        <span class="n">timeoutSeconds</span> <span class="o">=</span> <span class="mi">60</span>  <span class="c1"># [s]</span>
+        <span class="n">testProcess</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">timeoutSeconds</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">testProcess</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
+            <span class="n">_terminateProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ERROR: Thread safety test timed out after </span><span class="si">{</span><span class="n">timeoutSeconds</span><span class="si">}</span><span class="s2"> seconds&quot;</span><span class="p">)</span>
+            <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">,</span> <span class="n">success</span> <span class="o">=</span> <span class="n">resultQueue</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;error&quot;</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ERROR: Thread safety test failed with error: </span><span class="si">{</span><span class="n">results</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;traceback&quot;</span><span class="p">))</span>
+                <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span> <span class="k">if</span> <span class="n">success</span> <span class="k">else</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">queue</span><span class="o">.</span><span class="n">Empty</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;ERROR: Thread safety test completed but did not return results&quot;</span><span class="p">)</span>
             <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-
-        <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span> <span class="k">if</span> <span class="n">success</span> <span class="k">else</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="k">except</span> <span class="n">queue</span><span class="o">.</span><span class="n">Empty</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;ERROR: Thread safety test completed but did not return results&quot;</span><span class="p">)</span>
-        <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">_closeQueue</span><span class="p">(</span><span class="n">resultQueue</span><span class="p">)</span>
+        <span class="n">_closeProcess</span><span class="p">(</span><span class="n">testProcess</span><span class="p">)</span>
 </pre></div>
 
            </div>

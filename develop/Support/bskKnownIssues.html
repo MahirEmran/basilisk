@@ -150,11 +150,10 @@
 <h2>Version 2.11.0beta
 <a class="headerlink" href="#version-release" title="Link to this heading"></a></h2>
 <ul class="simple">
-<li><p>When building from source on Python 3.13 using SWIG 4.4.0, a build failure may occur
-if <code class="docutils literal notranslate"><span class="pre">pyLimitedAPI</span></code> is set to an ABI lower than Python 3.13 (e.g., <code class="docutils literal notranslate"><span class="pre">0x03080000</span></code>).
-SWIG 4.4.0 introduces a new C-API codepath for Python 3.13 that expects newer
-definition macros which are not present when targeting older <code class="docutils literal notranslate"><span class="pre">abi3</span></code> compatibility. As such, when building
-Basilisk with Python 3.13 or above, we automatically default to using the newer cp313 ABI.</p></li>
+<li><p>SWIG 4.4.0 caused Basilisk build failures in some Python 3.13+ source-build configurations.
+The development dependency range now excludes SWIG 4.4.0, and SWIG 4.4.1 has been verified to build
+successfully. If source builds fail with SWIG 4.4.0 or emit <code class="docutils literal notranslate"><span class="pre">builtin</span> <span class="pre">type</span> <span class="pre">swigvarlink</span> <span class="pre">has</span> <span class="pre">no</span> <span class="pre">__module__</span> <span class="pre">attribute</span></code>
+warnings, upgrade to SWIG 4.4.1 or newer.</p></li>
 </ul>
 </section>
 <section id="version-2-10-0-april-2-2026">
