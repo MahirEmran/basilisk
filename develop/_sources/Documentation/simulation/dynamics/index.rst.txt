@@ -32,6 +32,7 @@ dynamics
    extForceTorque/index
    facetDragEffector/index
    facetSRPDynamicEffector/index
+   facetedSRPEffector/index
    gravityEffector/index
    hingedRigidBodyMotor/index
    linearTranslationalBodies/index
