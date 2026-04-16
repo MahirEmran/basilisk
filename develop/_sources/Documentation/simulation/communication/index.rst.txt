@@ -14,5 +14,6 @@ communication
    :caption: Directories:
 
    _GeneralModuleFiles/index
+   downlinkHandling/index
    linkBudget/index
    simpleAntenna/index

@@ -44,6 +44,7 @@ msgPayloadDefC
    DeviceCmdMsgPayload
    DeviceStatusMsgPayload
    DipoleRequestBodyMsgPayload
+   DownlinkHandlingMsgPayload
    DragGeometryMsgPayload
    DvBurnCmdMsgPayload
    DvExecutionDataMsgPayload
