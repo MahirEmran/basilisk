@@ -45,6 +45,7 @@ public:
     void equationsOfMotion(double integTimeSeconds, double timeStep);
     void computeElectronBeamCurrent();
     void computePhotoelectricCurrent();
+    double computePlasmaElectronCurrent(double projectedArea, double spacecraftPotential);
     void preIntegration(uint64_t callTimeNanos) final;
     void postIntegration(uint64_t callTimeNanos) final;
 
@@ -62,6 +63,8 @@ public:
     Message<CurrentMsgPayload> targetEBCurrentOutMsg;  //!< Target electron beam current output message
     Message<CurrentMsgPayload> servicerPhotoelectricCurrentOutMsg;  //!< Servicer photoelectric current output message
     Message<CurrentMsgPayload> targetPhotoelectricCurrentOutMsg;  //!< Target photoelectric current output message
+    Message<CurrentMsgPayload> servicerPlasmaElectronCurrentOutMsg;  //!< Servicer plasma electron current output message
+    Message<CurrentMsgPayload> targetPlasmaElectronCurrentOutMsg;  //!< Target plasma electron current output message
 
     BSKLogger bskLogger;  //!< BSK Logging
 
@@ -83,6 +86,8 @@ private:
     double targetEBCurrent{};  //!< [Amps] Target electron beam current
     double servicerPhotoelectricCurrent{};  //!< [Amps] Servicer photoelectric current
     double targetPhotoelectricCurrent{};  //!< [Amps] Target photoelectric current
+    double servicerPlasmaElectronCurrent{};  //!< [Amps] Servicer plasma electron current
+    double targetPlasmaElectronCurrent{};  //!< [Amps] Target plasma electron current
 
     StateData *servicerPotentialState = nullptr;  //!< State data container for servicer potential
     StateData *targetPotentialState = nullptr;  //!< State data container for target potential

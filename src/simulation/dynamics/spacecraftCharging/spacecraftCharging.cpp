@@ -19,6 +19,7 @@
 
 #include "spacecraftCharging.h"
 #include "../_GeneralModuleFiles/svIntegratorRK4.h"
+#include "architecture/utilities/astroConstants.h"
 #include "architecture/utilities/avsEigenSupport.h"
 #include "architecture/utilities/macroDefinitions.h"
 #include <iostream>
@@ -116,6 +117,11 @@ void SpacecraftCharging::writeOutputStateMessages(uint64_t clockTime) {
     servicerPhotoelectricCurrentMsgBuffer.current = this->servicerPhotoelectricCurrent;
     this->servicerPhotoelectricCurrentOutMsg.write(&servicerPhotoelectricCurrentMsgBuffer, this->moduleID, clockTime);
 
+    CurrentMsgPayload servicerPlasmaElectronCurrentMsgBuffer;
+    servicerPlasmaElectronCurrentMsgBuffer = this->servicerPlasmaElectronCurrentOutMsg.zeroMsgPayload;
+    servicerPlasmaElectronCurrentMsgBuffer.current = this->servicerPlasmaElectronCurrent;
+    this->servicerPlasmaElectronCurrentOutMsg.write(&servicerPlasmaElectronCurrentMsgBuffer, this->moduleID, clockTime);
+
     // Write out the target output messages
     VoltMsgPayload targetVoltageMsgBuffer;
     targetVoltageMsgBuffer = this->targetPotentialOutMsg.zeroMsgPayload;
@@ -131,6 +137,11 @@ void SpacecraftCharging::writeOutputStateMessages(uint64_t clockTime) {
     targetPhotoelectricCurrentMsgBuffer = this->targetPhotoelectricCurrentOutMsg.zeroMsgPayload;
     targetPhotoelectricCurrentMsgBuffer.current = this->targetPhotoelectricCurrent;
     this->targetPhotoelectricCurrentOutMsg.write(&targetPhotoelectricCurrentMsgBuffer, this->moduleID, clockTime);
+
+    CurrentMsgPayload targetPlasmaElectronCurrentMsgBuffer;
+    targetPlasmaElectronCurrentMsgBuffer = this->targetPlasmaElectronCurrentOutMsg.zeroMsgPayload;
+    targetPlasmaElectronCurrentMsgBuffer.current = this->targetPlasmaElectronCurrent;
+    this->targetPlasmaElectronCurrentOutMsg.write(&targetPlasmaElectronCurrentMsgBuffer, this->moduleID, clockTime);
 }
 
 /*! Method for the charging equations of motion */
@@ -138,6 +149,11 @@ void SpacecraftCharging::equationsOfMotion(double integTimeSeconds, double timeS
     this->servicerPotential = this->servicerPotentialState->getState()(0, 0);
     this->targetPotential = this->targetPotentialState->getState()(0, 0);
 
+    // Compute the plasma electron currents
+    this->servicerPlasmaElectronCurrent = this->computePlasmaElectronCurrent(this->servicerSunlitArea,
+                                                                             this->servicerPotential);
+    this->targetPlasmaElectronCurrent = this->computePlasmaElectronCurrent(this->targetSunlitArea,
+                                                                             this->targetPotential);
     // Compute the electron beam currents
     this->computeElectronBeamCurrent();
 
@@ -146,13 +162,34 @@ void SpacecraftCharging::equationsOfMotion(double integTimeSeconds, double timeS
 
     // Set the servicer potential derivative
     Eigen::MatrixXd servicerPotentialRate(1, 1);
-    servicerPotentialRate(0, 0) = (this->servicerPhotoelectricCurrent + this->servicerEBCurrent) / this->servicerCapacitance;
+    servicerPotentialRate(0, 0) = (this->servicerPlasmaElectronCurrent +
+            this->servicerPhotoelectricCurrent + this->servicerEBCurrent) / this->servicerCapacitance;
     this->servicerPotentialState->setDerivative(servicerPotentialRate);
 
     // Set the target potential derivative
     Eigen::MatrixXd targetPotentialRate(1, 1);
-    targetPotentialRate(0, 0) = (this->targetPhotoelectricCurrent + this->targetEBCurrent) / this->targetCapacitance;
+    targetPotentialRate(0, 0) = (this->targetPlasmaElectronCurrent
+            + this->targetPhotoelectricCurrent + this->targetEBCurrent) / this->targetCapacitance;
     this->targetPotentialState->setDerivative(targetPotentialRate);
+}
+
+/*! Method to compute plasma electron current */
+double SpacecraftCharging::computePlasmaElectronCurrent(double projectedArea, double spacecraftPotential) {
+    double tempPhotons = 2.0; // [eV]
+    double q = 1.602176634e-19;  // [C] elementary charge
+    double m_e = 9.1093837015e-31; // [kg] electron mass
+    double n_e = 0.95 * (100 * 100 * 100);  // [m^-3] electron density
+    double w_e = std::sqrt((8 * tempPhotons) / (m_e * MPI));  // thermal electron velocity
+    double term = -0.25 * projectedArea * q * n_e * w_e;
+
+    double plasmaElectronCurrent{};
+    if (spacecraftPotential <= 0.0) {
+        plasmaElectronCurrent = term * exp(spacecraftPotential / tempPhotons);
+    } else {
+        plasmaElectronCurrent = term * (1 + (spacecraftPotential / tempPhotons));
+    }
+
+    return plasmaElectronCurrent;
 }
 
 /*! Method to compute electron beam currents */

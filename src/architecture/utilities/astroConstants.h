@@ -28,9 +28,6 @@
 #ifndef AU
 #define AU              149597870.693 /* astronomical unit in units of kilometers */
 #endif
-#ifndef AU2KM
-#define AU2KM           149597870.693 /* convert astronomical unit to kilometers */
-#endif
 #ifndef SPEED_LIGHT
 #define SPEED_LIGHT     299792458 /* [m/s] convert astronomical unit to kilometers */
 #endif
