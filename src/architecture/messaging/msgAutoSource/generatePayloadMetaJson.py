@@ -38,6 +38,7 @@ the normal CMake toolchain.
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import sys
 import tempfile
@@ -45,6 +46,27 @@ from pathlib import Path
 
 import clang.cindex
 from clang.cindex import CursorKind, TypeKind
+
+
+def _configureLibclang() -> None:
+    """Point clang.cindex to a bundled libclang if one is available."""
+    if clang.cindex.Config.library_file or clang.cindex.Config.library_path:
+        return
+
+    spec = importlib.util.find_spec("clang")
+    if not spec or not spec.origin:
+        return
+
+    clang_pkg_dir = Path(spec.origin).resolve().parent
+    native_dir = clang_pkg_dir / "native"
+    for lib_name in ("libclang.dylib", "libclang.so", "libclang.dll"):
+        lib_path = native_dir / lib_name
+        if lib_path.is_file():
+            clang.cindex.Config.set_library_file(str(lib_path))
+            return
+
+
+_configureLibclang()
 
 # ---------------------------------------------------------------------------
 # Stub headers

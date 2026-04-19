@@ -65,6 +65,35 @@ bskModuleOptionsFlag = {
 def is_running_virtual_env():
     return sys.prefix != sys.base_prefix
 
+
+def prepare_subprocess_env() -> dict:
+    """Prepare a stable environment for subprocesses launched by this script."""
+    env = os.environ.copy()
+
+    # Ensure tools installed in the active Python environment (e.g. swig) are discoverable.
+    python_bin_dir = str(Path(sys.executable).parent)
+    env["PATH"] = python_bin_dir + os.pathsep + env.get("PATH", "")
+
+    # Ensure Python clang bindings can locate libclang shipped in the same
+    # virtual environment (used by messaging metadata generation scripts).
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    libclang_dir = Path(sys.prefix) / "lib" / py_ver / "site-packages" / "clang" / "native"
+    if libclang_dir.is_dir():
+        lib_env_key = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+        env[lib_env_key] = str(libclang_dir) + os.pathsep + env.get(lib_env_key, "")
+
+    # On macOS, externally exported GCC toolchain variables can force Conan/CMake
+    # to ignore the selected Apple Clang profile and fail dependency builds.
+    if sys.platform == "darwin":
+        for var in ("CC", "CXX"):
+            value = env.get(var, "")
+            base = os.path.basename(value).lower()
+            if base.startswith("gcc") or base.startswith("g++"):
+                print(warningColor + f"Ignoring {var}={value} for macOS build compatibility." + endColor)
+                env.pop(var, None)
+
+    return env
+
 required_conan_version = ">=2.0.5"
 
 PY_LIMITED_API_PY39  = "0x03090000"  # cp39-abi3
@@ -317,6 +346,8 @@ class BasiliskConan(ConanFile):
         if self.options.get_safe("pathToExternalModules"):
             tc.cache_variables["EXTERNAL_MODULES_PATH"] = Path(str(self.options.pathToExternalModules)).resolve().as_posix()
         tc.cache_variables["PYTHON_VERSION"] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        tc.cache_variables["Python3_EXECUTABLE"] = str(sys.executable)
+        tc.cache_variables["Python_EXECUTABLE"] = str(sys.executable)
         tc.cache_variables["RECORDER_PROPERTY_ROLLBACK"] = "1" if self.options.get_safe("recorderPropertyRollback") else "0"
 
         # get the header directory for numpy
@@ -467,12 +498,14 @@ def conan_create_mujoco(print_fn: Optional[Callable[[str], None]] = print):
             print_fn(f"Package {ref} already available, skipping creation.")
 
 if __name__ == "__main__":
+    subproc_env = prepare_subprocess_env()
+
     # make sure conan is configured to use the libstdc++11 by default
     # XXX: This needs to be run before dispatching to Conan (i.e. outside of the
     # ConanFile object), because it affects the configuration of the first run.
     # (Running it here fixes https://github.com/AVSLab/basilisk/issues/525)
     try:
-        subprocess.check_output([sys.executable, "-m", "conans.conan", "profile", "detect", "--exist-ok"])
+        subprocess.check_output([sys.executable, "-m", "conans.conan", "profile", "detect", "--exist-ok"], env=subproc_env)
     except:
         # if profile already exists the above command returns an error.  Just ignore in this
         # case.  We don't want to overwrite an existing profile file
@@ -567,10 +600,10 @@ if __name__ == "__main__":
 
     print(statusColor + "Running conan install:" + endColor)
     print(conanInstallString)
-    completedProcess = subprocess.run(conanInstallString, shell=True, check=True)
+    completedProcess = subprocess.run(conanInstallString, shell=True, check=True, env=subproc_env)
 
     # run conan build
     buildCmdString = f'{sys.executable} -m conans.conan build . ' + ''.join(conanBuildOptionsList)
     print(statusColor + "Running conan build:" + endColor)
     print(buildCmdString)
-    completedProcess = subprocess.run(buildCmdString, shell=True, check=True)
+    completedProcess = subprocess.run(buildCmdString, shell=True, check=True, env=subproc_env)
