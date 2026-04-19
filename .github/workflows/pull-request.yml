@@ -30,7 +30,7 @@ jobs:
       - name: Pytest
         working-directory: src
         run: |
-          pip install pytest-error-for-skips pytest-timeout
+          pip install pytest-error-for-skips pytest-timeout numba
           pytest -n auto -m "not ciSkip" -rs --error-for-skips --timeout=300 --timeout-method=thread -v
       - name: CTest
         if: ${{ always() }}
@@ -55,7 +55,7 @@ jobs:
         shell: pwsh
         working-directory: src
         run: |
-          pip install pytest-error-for-skips pytest-timeout
+          pip install pytest-error-for-skips pytest-timeout numba
           pytest -n auto -m "not ciSkip" -rs --error-for-skips --timeout=300 --timeout-method=thread -v
           if(($LastExitCode -ne 0) -and ($LastExitCode -ne 5)) {exit 1}
       - name: CTest
@@ -81,13 +81,15 @@ jobs:
             '-n auto -m "not ciSkip" -rs --error-for-skips --timeout=300 --timeout-method=thread -v',
           ]
         conan_args: ["--opNav True --mujoco True --mujocoReplay True"]
+        pip_install_pkgs: ["numba"]
         include:
-          # An extra Basilisk build to test building without visualization enabled
+          # An extra Basilisk build to test building without visualization or numba enabled
           - python: "3.14"
             python_label: "MAX Python"
             pytest_flags: -n auto -m "not ciSkip" -rs --timeout=300 --timeout-method=thread -v
             conan_args: --opNav True --mujoco True --mujocoReplay True --vizInterface False
-            job_suffix: "--vizInterface False"
+            pip_install_pkgs: ""
+            job_suffix: "--vizInterface False, no numba"
 
     name: macOS (${{ matrix.python_label }}) ${{ matrix.job_suffix }}
     steps:
@@ -100,7 +102,7 @@ jobs:
       - name: Pytest
         working-directory: src
         run: |
-          pip install pytest-error-for-skips pytest-timeout
+          pip install pytest-error-for-skips pytest-timeout ${{ matrix.pip_install_pkgs }}
           pytest ${{ matrix.pytest_flags }}
       - name: CTest
         if: ${{ always() }}
