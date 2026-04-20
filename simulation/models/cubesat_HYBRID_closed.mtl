@@ -1,0 +1,15 @@
+newmtl body_mat
+Kd 0.68 0.68 0.70
+Ka 0.30 0.30 0.30
+Ks 0.06 0.06 0.06
+
+newmtl antenna_mat
+Kd 0.50 0.50 0.52
+Ka 0.22 0.22 0.22
+Ks 0.03 0.03 0.03
+
+newmtl panel_mat
+Kd 0.56 0.56 0.58
+Ka 0.24 0.24 0.24
+Ks 0.03 0.03 0.03
+

@@ -66,6 +66,8 @@ function(generate_messages searchDir generateCCode)
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/../")
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/")
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/../../")
+    include_directories("${CMAKE_BINARY_DIR}/autoSource")
+    include_directories("${CMAKE_BINARY_DIR}/autoSource/cMsgCInterface")
     include_directories(${NUMPY_INCLUDE_DIR})
 
     swig_add_library(
