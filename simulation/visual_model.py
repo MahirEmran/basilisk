@@ -155,25 +155,24 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     panel_long_edge = body_size_z_m
     panel_z_elev = 0.0
 
-    if panels_open:
-        # Keep your current open-panel placement exactly as requested.
-        panel_open_x = -0.5 * body_size_x_m - 0.5 * panel_short_edge
-        panel_open_y = 0.5 * body_size_y_m + 0.5 * panel_thickness
-        sign = -1.0
-        start_faces = len(faces)
-        add_panel_triangles(
-            verts,
-            faces,
-            center=[panel_open_x, sign * panel_open_y, panel_z_elev],
-            size=[panel_short_edge, panel_thickness, panel_long_edge],
-        )
-        add_panel_triangles(
-            verts,
-            faces,
-            center=[panel_open_x + body_size_y_m + panel_short_edge, sign * panel_open_y, panel_z_elev],
-            size=[panel_short_edge, panel_thickness, panel_long_edge],
-        )
-        mark_component("panel_mat", start_faces)
+    # Keep your current open-panel placement exactly as requested.
+    panel_open_x = -0.5 * body_size_x_m - 0.5 * panel_short_edge
+    panel_open_y = 0.5 * body_size_y_m + 0.5 * panel_thickness
+    sign = -1.0
+    start_faces = len(faces)
+    add_panel_triangles(
+        verts,
+        faces,
+        center=[panel_open_x, sign * panel_open_y, panel_z_elev],
+        size=[panel_short_edge, panel_thickness, panel_long_edge],
+    )
+    add_panel_triangles(
+        verts,
+        faces,
+        center=[panel_open_x + body_size_y_m + panel_short_edge, sign * panel_open_y, panel_z_elev],
+        size=[panel_short_edge, panel_thickness, panel_long_edge],
+    )
+    mark_component("panel_mat", start_faces)
 
     write_obj(path, verts, faces, face_materials, panel_open=panels_open)
 

@@ -67,7 +67,7 @@ if [[ "${RUN_KIND}" == "test" ]]; then
 fi
 
 echo "[BUILD] Rebuilding Basilisk with external modules from: ${EXTERNAL_DIR}"
-"${PYTHON_BIN}" "${BSK_ROOT}/conanfile.py" --clean --pathToExternalModules "${EXTERNAL_DIR}"
+# "${PYTHON_BIN}" "${BSK_ROOT}/conanfile.py" --clean --pathToExternalModules "${EXTERNAL_DIR}"
 
 echo "[RUN] Running HuskySat simulation for ${HOURS} hour(s) in mode ${MODE}"
 cd "${SIM_DIR}"

@@ -402,7 +402,7 @@ if ADCS_MODE == "BOTH":
     run_both_modes(CLI_ARGS)
 
 # simulation start time - used for sun estimate + SPICE
-SIM_EPOCH_UTC = "2026-04-01T12:00:00.000Z"
+SIM_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
 
 # body frame layout:
 #   +X = long rectangular side  → FOUND camera face
