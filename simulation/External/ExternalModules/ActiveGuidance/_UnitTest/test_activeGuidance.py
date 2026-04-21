@@ -20,10 +20,10 @@ import numpy as np
 
 from Basilisk.utilities import SimulationBaseClass, macros
 from Basilisk.architecture import messaging
-from Basilisk.ExternalModules import huskyActiveGuidance
+from Basilisk.ExternalModules import activeGuidance
 
 
-def test_husky_active_guidance_smoke():
+def test_active_guidance_smoke():
     r"""Run a minimal simulation and verify the external guidance module writes a finite AttRef.
 
     This test checks that:
@@ -38,8 +38,8 @@ def test_husky_active_guidance_smoke():
     task_rate = macros.sec2nano(0.5)
     proc.addTask(sim.CreateNewTask(task_name, task_rate))
 
-    module = huskyActiveGuidance.HuskyActiveGuidance()
-    module.ModelTag = "huskyActiveGuidance"
+    module = activeGuidance.ActiveGuidance()
+    module.ModelTag = "activeGuidance"
     module.setModeString("ROLL_ONLY")
     module.setLostExclHalfDeg(17.5)
     module.setStatusPeriodSec(10.0)

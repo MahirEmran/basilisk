@@ -1,41 +1,3 @@
-# HuskySat Camera Simulation (In-Repo Copy)
-
-This folder contains a copy of the HuskySat camera simulation and external C++ guidance module wired for a
-from-source Basilisk build.
-
-## Quick Start
-
-From the Basilisk repository root:
-
-```bash
-source .venv/bin/activate
-./build.sh test
-```
-
-`./build.sh test` will:
-
-1. Rebuild Basilisk with `--pathToExternalModules simulation/huskysat_camera_sim/External`
-2. Run a short simulation using the external C++ guidance backend
-3. Clean up the generated `.bin` file and plots folder after the run
-
-To run for a specific duration (in hours), pass a number:
-
-```bash
-./build.sh 24
-./build.sh 744
-```
-
-## Manual Run
-
-```bash
-source .venv/bin/activate
-python conanfile.py --clean --pathToExternalModules simulation/huskysat_camera_sim/External
-cd simulation/huskysat_camera_sim
-PYTHONPATH=../../dist3 python simulate_cubesat.py --guidance-backend EXTERNAL_CPP --mode HYBRID --hours 24 --bin-path ./output_external.bin
-```
-
-Open Vizard and load the generated `.bin` file.
-
 # Basilisk Module Integration Guide (External C/C++ Modules)
 
 This guide is intentionally integration-first. It starts with "how to wire a working module" and moves testing/validation to the end.
@@ -56,6 +18,8 @@ simulation/External/
     ActiveGuidance/
       activeGuidance.h
       activeGuidance.cpp
+         activeGuidanceMath.h
+         activeGuidanceMath.cpp
       activeGuidance.i
       activeGuidance.rst
       _UnitTest/
@@ -76,6 +40,12 @@ In `activeGuidance.h/.cpp`, implement at least:
 3. Output: attitude reference as `Message<AttRefMsgPayload>`.
 4. `Reset(uint64_t)`.
 5. `UpdateState(uint64_t)`.
+
+Recommended separation pattern:
+
+1. Keep `activeGuidance.*` as a thin Basilisk wrapper (messages, mode selection, logging, output writes).
+2. Move geometry/math-heavy code into helper files such as `activeGuidanceMath.h/.cpp`.
+3. Keep the wrapper readable by delegating roll solves, vector operations, and targeting geometry to helper functions.
 
 Concrete `UpdateState()` flow:
 
@@ -179,7 +149,8 @@ Recommended split:
 
 ```text
 ExternalModules/ActiveGuidance/
-  activeGuidance.h/.cpp/.i
+   activeGuidance.h/.cpp/.i          # Basilisk SysModel wrapper and message I/O
+   activeGuidanceMath.h/.cpp         # Geometry and optimization math helpers
   legacyAdapter.h/.cpp
   legacyAlgo.h/.cpp
 ```
@@ -197,6 +168,20 @@ Critical discipline for every mapped field:
 2. Frame (body, inertial, sensor).
 3. Direction convention (A->B versus B->A LOS).
 
+## 5. Common Integration Failure Modes
+
+1. Import failure.
+   - Rebuild with correct `--pathToExternalModules`.
+   - Ensure `PYTHONPATH=dist3`.
+2. Module outputs identity forever.
+   - Required input not linked/written.
+   - Position magnitude invalid near zero.
+3. SWIG compile errors.
+   - Missing payload/header includes in `.i`.
+   - `%module` mismatch with Python import name.
+4. Logic is right standalone but wrong in simulation.
+   - Frame/unit mismatch at adapter boundary.
+   - Message timing/order mismatch between tasks.
 
 ## 6. LAST: Testing, Validation, and HIL Stress
 
@@ -211,7 +196,7 @@ Create `_UnitTest/test_activeGuidance.py` with:
 5. Short sim run.
 6. Assertions on finite outputs and expected interface behavior.
 
-## 6.2 Testing
+## 6.2 Integration Smoke Test
 
 ```bash
 source .venv/bin/activate
@@ -220,6 +205,25 @@ PYTHONPATH=dist3 python -c "from Basilisk.ExternalModules import activeGuidance;
 cd simulation
 PYTHONPATH=../dist3 python simulate_cubesat.py --guidance-backend EXTERNAL_CPP --mode HYBRID --hours 24 --bin-path ./output_24h.bin
 ```
+
+## 6.3 HIL/Stress Recommendations
+
+1. Add bridge modules for sensor in and actuator out.
+2. Inject delay, jitter, and dropout before hardware-in-loop runs.
+3. Extend `test_fov_combinations.sh` to sweep:
+   - initial attitude/rates,
+   - orbit/epoch,
+   - sensor noise/bias,
+   - transport fault parameters.
+
+## 6.4 PR Checklist
+
+1. Build passes with external path.
+2. Module imports from `Basilisk.ExternalModules`.
+3. Unit test exists and passes.
+4. Module `.rst` docs exist.
+5. Release note snippet added under `docs/source/Support/bskReleaseNotesSnippets/`.
+6. If fixing a known issue, update `docs/source/Support/bskKnownIssues.rst`.
 
 ---
 
@@ -230,5 +234,4 @@ If you clone this pattern for a second module, copy the ActiveGuidance structure
 3. algorithm body in `UpdateState()`,
 4. SWIG `%module` and include list,
 5. unit test assertions.
-
 

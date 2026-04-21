@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# test_fov_combinations.sh
-# Run all combinations of LOST/FOUND FOVs for a month and save unique outputs.
-# Does NOT rebuild Basilisk or rerun conanfile.py.
 
 set -euo pipefail
 
@@ -13,7 +10,7 @@ SIM_SCRIPT="$SIM_DIR/simulate_cubesat.py"
 LOST_FOVS=(10 15 20)
 FOUND_FOVS=(50 55 60 65 70 75 80 85)
 
-MONTH_HOURS=744  # 31 days
+MONTH_HOURS=744 # 31 days
 
 MAX_PROCS=4
 
@@ -41,7 +38,6 @@ for LOST in "${LOST_FOVS[@]}"; do
   for FOUND in "${FOUND_FOVS[@]}"; do
     run_sim "$LOST" "$FOUND" &
     PIDS+=("$!")
-    # If we've hit the max, wait for the first to finish
     if (( ${#PIDS[@]} >= MAX_PROCS )); then
       wait "${PIDS[0]}"
       PIDS=("${PIDS[@]:1}")

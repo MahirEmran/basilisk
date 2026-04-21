@@ -280,7 +280,7 @@ def parse_cli_args():
         choices=["PYTHON", "EXTERNAL_CPP"],
         default=DEFAULT_GUIDANCE_BACKEND,
         type=str.upper,
-        help="Guidance implementation backend. EXTERNAL_CPP expects Basilisk.ExternalModules.huskyActiveGuidance.",
+        help="Guidance implementation backend. EXTERNAL_CPP expects Basilisk.ExternalModules.activeGuidance.",
     )
     parser.add_argument(
         "--bin-path",
@@ -308,15 +308,15 @@ CLI_ARGS = parse_cli_args()
 def _create_guidance_module(backend, mode, epoch_iso_utc, lost_excl_half_deg, status_period_sec, pos_found_b):
     if backend == "EXTERNAL_CPP":
         try:
-            from Basilisk.ExternalModules import huskyActiveGuidance
+            from Basilisk.ExternalModules import activeGuidance
         except Exception as exc:
             raise RuntimeError(
-                "EXTERNAL_CPP backend requested, but Basilisk.ExternalModules.huskyActiveGuidance "
+                "EXTERNAL_CPP backend requested, but Basilisk.ExternalModules.activeGuidance "
                 "is unavailable. Rebuild Basilisk from source with "
-                "--pathToExternalModules pointing to huskysat-camera-sim/External."
+                "--pathToExternalModules pointing to simulation/External."
             ) from exc
 
-        module = huskyActiveGuidance.HuskyActiveGuidance()
+        module = activeGuidance.ActiveGuidance()
         module.setModeString(mode)
         module.setLostExclHalfDeg(float(lost_excl_half_deg))
         module.setStatusPeriodSec(float(status_period_sec))

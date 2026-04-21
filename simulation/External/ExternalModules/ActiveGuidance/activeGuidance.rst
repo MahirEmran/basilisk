@@ -1,4 +1,4 @@
-HuskyActiveGuidance
+ActiveGuidance
 ===================
 
 Executive Summary

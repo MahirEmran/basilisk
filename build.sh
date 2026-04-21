@@ -30,7 +30,7 @@ if [[ ! -d "${EXTERNAL_DIR}" ]]; then
   exit 1
 fi
 
-ARG="${1:-1}"  # [h]
+ARG="${1:-1}"
 HOURS=""
 RUN_KIND="normal"
 
@@ -41,7 +41,7 @@ case "${ARG}" in
     ;;
   test)
     RUN_KIND="test"
-    HOURS="0.01"  # [h]
+    HOURS="0.01"
     ;;
   *)
     if [[ "${ARG}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
