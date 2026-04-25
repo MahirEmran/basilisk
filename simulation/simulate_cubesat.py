@@ -7,7 +7,16 @@ import atexit
 import csv
 import numpy as np
 from Basilisk.utilities import SimulationBaseClass, macros, simIncludeGravBody, orbitalMotion, RigidBodyKinematics as rbk
-from Basilisk.simulation import spacecraft, extForceTorque, simpleNav
+from Basilisk.simulation import (
+    spacecraft,
+    extForceTorque,
+    simpleNav,
+    eclipse,
+    simpleSolarPanel,
+    simpleBattery,
+    simplePowerSink,
+    sensorThermal,
+)
 from Basilisk.fswAlgorithms import attTrackingError, mrpPD
 from Basilisk.architecture import messaging
 
@@ -15,7 +24,12 @@ from guidance_math import approx_sun_hat_from_epoch, compute_compromise_x, solve
 from active_guidance import ActiveGuidance
 from visual_model import build_satellite_obj, apply_visual_model
 from uptime_metrics import compute_camera_uptime_flags
-from vizard_scene import enable_vizard, add_vizard_scene_overlays
+from vizard_scene import (
+    enable_vizard,
+    add_vizard_scene_overlays,
+    add_spacecraft_status_overlay,
+    update_spacecraft_status_overlay,
+)
 
 
 DEFAULT_ADCS_MODE = "HYBRID"
@@ -28,6 +42,18 @@ DEFAULT_EXCLUSION_BUFFER_DEG = 10.0
 DEFAULT_STATUS_PERIOD_SEC = 60.0
 DEFAULT_BIN_PATH = "./output.bin"
 DEFAULT_GUIDANCE_BACKEND = "EXTERNAL_CPP"
+DEFAULT_GNSS_FIX_PERIOD_SEC = 600.0
+DEFAULT_GNSS_FIX_DURATION_SEC = 60.0
+DEFAULT_GNSS_ZENITH_HALF_ANGLE_DEG = 45.0
+DEFAULT_GNSS_DEAD_RECKONING_SEC = 900.0
+DEFAULT_DOWNLINK_WINDOW_SEC = 420.0
+DEFAULT_GROUND_STATIONS = [
+    "SEATTLE:47.6062:-122.3321",
+    "DARMSTADT:49.8728:8.6512",
+    "CANBERRA:-35.2809:149.1300",
+    "HONOLULU:21.3069:-157.8583",
+    "SANTIAGO:-33.4489:-70.6693",
+]
 
 
 PROGRAM_START_TIME_SEC = time.perf_counter()
@@ -276,6 +302,45 @@ def parse_cli_args():
         help="Status print period in seconds for HYBRID mode (default: 60).",
     )
     parser.add_argument(
+        "--gnss-fix-period",
+        type=float,
+        default=DEFAULT_GNSS_FIX_PERIOD_SEC,
+        help="GNSS fix cadence in seconds while in experiment context (default: 600).",
+    )
+    parser.add_argument(
+        "--gnss-fix-duration",
+        type=float,
+        default=DEFAULT_GNSS_FIX_DURATION_SEC,
+        help="Duration of each GNSS_FIX state in seconds (default: 60).",
+    )
+    parser.add_argument(
+        "--gnss-zenith-half-angle",
+        type=float,
+        default=DEFAULT_GNSS_ZENITH_HALF_ANGLE_DEG,
+        help="Half-angle cone from zenith where GNSS reception is considered healthy (default: 45 deg).",
+    )
+    parser.add_argument(
+        "--gnss-dead-reckoning",
+        type=float,
+        default=DEFAULT_GNSS_DEAD_RECKONING_SEC,
+        help="Maximum dead-reckoning horizon in seconds before forcing GNSS_FIX (default: 900).",
+    )
+    parser.add_argument(
+        "--downlink-window",
+        type=float,
+        default=DEFAULT_DOWNLINK_WINDOW_SEC,
+        help="Maximum DOWNLINK dwell in seconds per station visibility pass (default: 420).",
+    )
+    parser.add_argument(
+        "--ground-station",
+        action="append",
+        default=None,
+        help=(
+            "Ground station specification as LABEL:LAT_DEG:LON_DEG. "
+            "Repeat for multiple stations. If omitted, built-in defaults are used."
+        ),
+    )
+    parser.add_argument(
         "--guidance-backend",
         choices=["PYTHON", "EXTERNAL_CPP"],
         default=DEFAULT_GUIDANCE_BACKEND,
@@ -299,13 +364,38 @@ def parse_cli_args():
         parser.error("--exclusion-buffer must be >= 0")
     if args.status_period <= 0.0:
         parser.error("--status-period must be greater than 0")
+    if args.gnss_fix_period <= 0.0:
+        parser.error("--gnss-fix-period must be greater than 0")
+    if args.gnss_fix_duration <= 0.0:
+        parser.error("--gnss-fix-duration must be greater than 0")
+    if args.gnss_zenith_half_angle <= 0.0 or args.gnss_zenith_half_angle > 90.0:
+        parser.error("--gnss-zenith-half-angle must be in (0, 90]")
+    if args.gnss_dead_reckoning <= 0.0:
+        parser.error("--gnss-dead-reckoning must be greater than 0")
+    if args.downlink_window <= 0.0:
+        parser.error("--downlink-window must be greater than 0")
+    if args.ground_station is None:
+        args.ground_station = list(DEFAULT_GROUND_STATIONS)
     return args
 
 
 CLI_ARGS = parse_cli_args()
 
 
-def _create_guidance_module(backend, mode, epoch_iso_utc, lost_excl_half_deg, status_period_sec, pos_found_b):
+def _create_guidance_module(
+    backend,
+    mode,
+    epoch_iso_utc,
+    lost_excl_half_deg,
+    status_period_sec,
+    pos_found_b,
+    gnss_fix_period_sec,
+    gnss_fix_duration_sec,
+    gnss_zenith_half_angle_deg,
+    gnss_dead_reckoning_sec,
+    downlink_window_sec,
+    ground_stations,
+):
     if backend == "EXTERNAL_CPP":
         try:
             from Basilisk.ExternalModules import activeGuidance
@@ -320,6 +410,12 @@ def _create_guidance_module(backend, mode, epoch_iso_utc, lost_excl_half_deg, st
         module.setModeString(mode)
         module.setLostExclHalfDeg(float(lost_excl_half_deg))
         module.setStatusPeriodSec(float(status_period_sec))
+        module.setGnssFixPeriodSec(float(gnss_fix_period_sec))
+        module.setGnssFixDurationSec(float(gnss_fix_duration_sec))
+        module.setGnssZenithHalfAngleDeg(float(gnss_zenith_half_angle_deg))
+        module.setGnssDeadReckoningSec(float(gnss_dead_reckoning_sec))
+        module.setDownlinkWindowSec(float(downlink_window_sec))
+        module.setGroundStationsCsv(";".join(ground_stations))
         module.setPosFound_B(float(pos_found_b[0]), float(pos_found_b[1]), float(pos_found_b[2]))
         sun_hat = approx_sun_hat_from_epoch(epoch_iso_utc)
         module.setDefaultSunHat_N(float(sun_hat[0]), float(sun_hat[1]), float(sun_hat[2]))
@@ -331,6 +427,12 @@ def _create_guidance_module(backend, mode, epoch_iso_utc, lost_excl_half_deg, st
         lost_excl_half_deg=lost_excl_half_deg,
         status_period_sec=status_period_sec,
         pos_found_b=pos_found_b,
+        gnss_fix_period_sec=gnss_fix_period_sec,
+        gnss_fix_duration_sec=gnss_fix_duration_sec,
+        gnss_zenith_half_angle_deg=gnss_zenith_half_angle_deg,
+        gnss_dead_reckoning_sec=gnss_dead_reckoning_sec,
+        downlink_window_sec=downlink_window_sec,
+        ground_stations=ground_stations,
     )
 
 
@@ -350,6 +452,24 @@ def _get_guidance_state(guidance):
             return state
 
     return None
+
+
+def _get_active_ground_station(guidance):
+    if hasattr(guidance, "active_ground_station"):
+        station = guidance.active_ground_station
+        if isinstance(station, bytes):
+            station = station.decode("utf-8", errors="ignore")
+        if isinstance(station, str):
+            return station
+
+    if hasattr(guidance, "getActiveGroundStation"):
+        station = guidance.getActiveGroundStation()
+        if isinstance(station, bytes):
+            station = station.decode("utf-8", errors="ignore")
+        if isinstance(station, str):
+            return station
+
+    return "NONE"
 
 
 def run_both_modes(args):
@@ -372,8 +492,15 @@ def run_both_modes(args):
         "--found-fov", str(args.found_fov),
         "--exclusion-buffer", str(args.exclusion_buffer),
         "--status-period", str(args.status_period),
+        "--gnss-fix-period", str(args.gnss_fix_period),
+        "--gnss-fix-duration", str(args.gnss_fix_duration),
+        "--gnss-zenith-half-angle", str(args.gnss_zenith_half_angle),
+        "--gnss-dead-reckoning", str(args.gnss_dead_reckoning),
+        "--downlink-window", str(args.downlink_window),
         "--guidance-backend", str(args.guidance_backend),
     ]
+    for station_spec in args.ground_station:
+        shared.extend(["--ground-station", station_spec])
     commands = [
         [sys.executable, script_path, "--mode", "ROLL_ONLY", "--bin-path", roll_only_output, *shared],
         [sys.executable, script_path, "--mode", "EXPERIMENT", "--bin-path", experiment_output, *shared],
@@ -390,7 +517,8 @@ def run_both_modes(args):
 # mode for ADCS
 # - "ROLL_ONLY": keep -X on Sun (so +X FOUND faces away); roll to maximize LOST (+Z) sky clearance
 # - "EXPERIMENT": point FOUND (+X) toward Earth limb and try to roll for LOST (+Z) uptime
-# - "HYBRID": switch between CHARGING (ROLL_ONLY) and EXPERIMENT automatically
+# - "HYBRID": switch between CHARGING and experiment-context states automatically
+#   experiment-context priority: GNSS_FIX > DOWNLINK > EXPERIMENT
 # - "BOTH": spawn two subprocesses and run fixed ROLL_ONLY and fixed EXPERIMENT for comparison
 ADCS_MODE = CLI_ARGS.mode
 
@@ -528,6 +656,12 @@ guidance = _create_guidance_module(
     lost_excl_half_deg=LOST_EXCL_HALF_DEG,
     status_period_sec=CLI_ARGS.status_period,
     pos_found_b=POS_FOUND_B,
+    gnss_fix_period_sec=CLI_ARGS.gnss_fix_period,
+    gnss_fix_duration_sec=CLI_ARGS.gnss_fix_duration,
+    gnss_zenith_half_angle_deg=CLI_ARGS.gnss_zenith_half_angle,
+    gnss_dead_reckoning_sec=CLI_ARGS.gnss_dead_reckoning,
+    downlink_window_sec=CLI_ARGS.downlink_window,
+    ground_stations=CLI_ARGS.ground_station,
 )
 guidance.ModelTag = "activeGuidance"
 guidance.scStateInMsg.subscribeTo(scObject.scStateOutMsg)
@@ -572,6 +706,63 @@ extFT.ModelTag = "extFT"
 scSim.AddModelToTask(simTaskName, extFT)
 scObject.addDynamicEffector(extFT)
 extFT.cmdTorqueInMsg.subscribeTo(mrpControl.cmdTorqueOutMsg)
+
+payload_power_draw_w = 8.0  # [W]
+battery_capacity_whr = 30.0  # [W*hr]
+battery_initial_charge_whr = 18.0  # [W*hr]
+solar_panel_area_m2 = 0.12  # [m^2]
+solar_panel_efficiency = 0.29  # [-]
+solar_panel_normal_b = [-1.0, 0.0, 0.0]  # [-]
+sensor_area_m2 = 0.02  # [m^2]
+sensor_absorptivity = 0.80  # [-]
+sensor_emissivity = 0.80  # [-]
+sensor_mass_kg = 0.35  # [kg]
+sensor_specific_heat_j_per_kg_k = 900.0  # [J/kg/K]
+sensor_initial_temp_c = 8.0  # [C]
+sensor_normal_b = [1.0, 0.0, 0.0]  # [-]
+
+eclipseObject = eclipse.Eclipse()
+eclipseObject.ModelTag = "statusEclipse"
+eclipseObject.addSpacecraftToModel(scObject.scStateOutMsg)
+eclipseObject.addPlanetToModel(gravFactory.spiceObject.planetStateOutMsgs[0])
+eclipseObject.sunInMsg.subscribeTo(gravFactory.spiceObject.planetStateOutMsgs[sun_index])
+scSim.AddModelToTask(simTaskName, eclipseObject)
+
+solarPanel = simpleSolarPanel.SimpleSolarPanel()
+solarPanel.ModelTag = "statusSolarPanel"
+solarPanel.stateInMsg.subscribeTo(scObject.scStateOutMsg)
+solarPanel.sunInMsg.subscribeTo(gravFactory.spiceObject.planetStateOutMsgs[sun_index])
+solarPanel.sunEclipseInMsg.subscribeTo(eclipseObject.eclipseOutMsgs[0])
+solarPanel.setPanelParameters(solar_panel_normal_b, solar_panel_area_m2, solar_panel_efficiency)
+scSim.AddModelToTask(simTaskName, solarPanel)
+
+payloadPowerSink = simplePowerSink.SimplePowerSink()
+payloadPowerSink.ModelTag = "statusPayloadLoad"
+payloadPowerSink.nodePowerOut = -payload_power_draw_w
+scSim.AddModelToTask(simTaskName, payloadPowerSink)
+
+powerMonitor = simpleBattery.SimpleBattery()
+powerMonitor.ModelTag = "statusBattery"
+powerMonitor.storageCapacity = battery_capacity_whr * 3600.0  # [W*s]
+powerMonitor.storedCharge_Init = battery_initial_charge_whr * 3600.0  # [W*s]
+powerMonitor.addPowerNodeToModel(solarPanel.nodePowerOutMsg)
+powerMonitor.addPowerNodeToModel(payloadPowerSink.nodePowerOutMsg)
+scSim.AddModelToTask(simTaskName, powerMonitor)
+
+thermalSensor = sensorThermal.SensorThermal()
+thermalSensor.ModelTag = "statusSensorThermal"
+thermalSensor.T_0 = sensor_initial_temp_c
+thermalSensor.nHat_B = sensor_normal_b
+thermalSensor.sensorArea = sensor_area_m2
+thermalSensor.sensorAbsorptivity = sensor_absorptivity
+thermalSensor.sensorEmissivity = sensor_emissivity
+thermalSensor.sensorMass = sensor_mass_kg
+thermalSensor.sensorSpecificHeat = sensor_specific_heat_j_per_kg_k
+thermalSensor.sensorPowerDraw = payload_power_draw_w
+thermalSensor.sunInMsg.subscribeTo(gravFactory.spiceObject.planetStateOutMsgs[sun_index])
+thermalSensor.stateInMsg.subscribeTo(scObject.scStateOutMsg)
+thermalSensor.sunEclipseInMsg.subscribeTo(eclipseObject.eclipseOutMsgs[0])
+scSim.AddModelToTask(simTaskName, thermalSensor)
 
 save_path = os.path.abspath(CLI_ARGS.bin_path)
 save_dir = os.path.dirname(save_path)
@@ -622,16 +813,35 @@ add_vizard_scene_overlays(
     found_half_deg=FOUND_HALF_DEG,
     lost_excl_half_deg=LOST_EXCL_HALF_DEG,
     found_excl_half_deg=FOUND_EXCL_HALF_DEG,
+    ground_station_specs=CLI_ARGS.ground_station,
+    earth_body_name=earth.displayName,
 )
+status_overlay_station = add_spacecraft_status_overlay(viz, scObject.ModelTag)
+status_overlay_update_period_nanos = macros.sec2nano(30.0)
+last_status_overlay_update_nanos = None
 
 print(f"Mode: {ADCS_MODE}")
 print(f"Guidance backend: {CLI_ARGS.guidance_backend}")
+print(f"GNSS fix cadence: {CLI_ARGS.gnss_fix_period:.1f} s, duration: {CLI_ARGS.gnss_fix_duration:.1f} s")
+print(f"GNSS zenith half-angle: {CLI_ARGS.gnss_zenith_half_angle:.1f} deg")
+print(f"GNSS dead-reckoning limit: {CLI_ARGS.gnss_dead_reckoning:.1f} s")
+print(f"Downlink window: {CLI_ARGS.downlink_window:.1f} s")
+print("Ground stations:")
+for station_spec in CLI_ARGS.ground_station:
+    print(f"  - {station_spec}")
 scSim.InitializeSimulation()
 stop_time_nanos = macros.hour2nano(SIM_HOURS)
 visual_update_step_nanos = macros.sec2nano(1.0)
 next_stop_nanos = 0
 current_visual_state = None
 # current_visual_state = initial_visual_state
+last_reported_state = None
+last_reported_station = "NONE"
+
+# Live telemetry from the Basilisk power and thermal modules.
+telemetry_soc_pct = 100.0 * battery_initial_charge_whr / battery_capacity_whr  # [%]
+telemetry_temp_c = sensor_initial_temp_c  # [C]
+telemetry_net_power_w = 0.0  # [W]
 
 sampled_time_nanos = 0
 lost_uptime_nanos = 0
@@ -643,6 +853,11 @@ lost_uptime_charging_nanos = 0
 lost_uptime_experiment_nanos = 0
 found_uptime_charging_nanos = 0
 found_uptime_experiment_nanos = 0
+
+STATE_NAMES = ("CHARGING", "EXPERIMENT", "GNSS_FIX", "DOWNLINK")
+sampled_time_by_state_nanos = {state_name: 0 for state_name in STATE_NAMES}
+lost_uptime_by_state_nanos = {state_name: 0 for state_name in STATE_NAMES}
+found_uptime_by_state_nanos = {state_name: 0 for state_name in STATE_NAMES}
 
 lost_experiment_fail_nanos_by_body = {
     "earth": 0,
@@ -682,6 +897,14 @@ uptime_history = {
 while next_stop_nanos < stop_time_nanos:
     previous_stop_nanos = next_stop_nanos
     next_stop_nanos = min(next_stop_nanos + visual_update_step_nanos, stop_time_nanos)
+
+    # CHARGING mode sheds payload load to let the battery recover.
+    commanded_state = _get_guidance_state(guidance)
+    payload_is_on = commanded_state != "CHARGING"
+    payload_power_status = 1 if payload_is_on else 0
+    payloadPowerSink.powerStatus = payload_power_status
+    thermalSensor.sensorPowerStatus = payload_power_status
+
     scSim.ConfigureStopTime(next_stop_nanos)
     scSim.ExecuteSimulation()
 
@@ -713,11 +936,18 @@ while next_stop_nanos < stop_time_nanos:
 
             # Track per-state uptime so CHARGING and EXPERIMENT performance are visible separately.
             sample_state = _get_guidance_state(guidance)
-            if sample_state not in ("CHARGING", "EXPERIMENT"):
+            if sample_state not in STATE_NAMES:
                 if ADCS_MODE == "ROLL_ONLY":
                     sample_state = "CHARGING"
                 elif ADCS_MODE == "EXPERIMENT":
                     sample_state = "EXPERIMENT"
+
+            if sample_state in STATE_NAMES:
+                sampled_time_by_state_nanos[sample_state] += dt_nanos
+                if lost_ok:
+                    lost_uptime_by_state_nanos[sample_state] += dt_nanos
+                if found_ok:
+                    found_uptime_by_state_nanos[sample_state] += dt_nanos
 
             if sample_state == "CHARGING":
                 sampled_time_charging_nanos += dt_nanos
@@ -738,7 +968,7 @@ while next_stop_nanos < stop_time_nanos:
                     found_charging_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
                 if not found_sun_clear:
                     found_charging_fail_nanos_by_reason["sun_keepout_violation"] += dt_nanos
-            elif sample_state == "EXPERIMENT":
+            elif sample_state in ("EXPERIMENT", "GNSS_FIX", "DOWNLINK"):
                 sampled_time_experiment_nanos += dt_nanos
                 if lost_ok:
                     lost_uptime_experiment_nanos += dt_nanos
@@ -799,9 +1029,52 @@ while next_stop_nanos < stop_time_nanos:
 
     # Visual state mirrors guidance mode: OPEN panels while charging, hidden panels otherwise.
     active_state = _get_guidance_state(guidance)
+    active_station = _get_active_ground_station(guidance)
+    state_changed = active_state != last_reported_state
+    station_changed = active_station != last_reported_station
+
+    if state_changed or station_changed:
+        print(
+            f"[MODE] t={next_stop_nanos * 1.0e-9:8.1f}s "
+            f"state={active_state} station={active_station}"
+        )
+        last_reported_state = active_state
+        last_reported_station = active_station
+
+    battery_state = powerMonitor.batPowerOutMsg.read()
+    thermal_state = thermalSensor.temperatureOutMsg.read()
+    telemetry_net_power_w = float(battery_state.currentNetPower)
+    telemetry_temp_c = float(thermal_state.temperature)
+    if powerMonitor.storageCapacity > 0.0:
+        telemetry_soc_pct = float(
+            np.clip(
+                100.0 * battery_state.storageLevel / powerMonitor.storageCapacity, 0.0, 100.0
+            )
+        )
+    else:
+        telemetry_soc_pct = 0.0
+    is_charging_state = telemetry_net_power_w >= 0.0
+    should_update_overlay = (
+        last_status_overlay_update_nanos is None
+        or (next_stop_nanos - last_status_overlay_update_nanos) >= status_overlay_update_period_nanos
+        or state_changed
+        or station_changed
+    )
+    if should_update_overlay:
+        update_spacecraft_status_overlay(
+            viz,
+            station_name=status_overlay_station,
+            is_charging=is_charging_state,
+            guidance_state=active_state,
+            net_power_w=telemetry_net_power_w,
+            temp_c=telemetry_temp_c,
+            soc_pct=telemetry_soc_pct,
+        )
+        last_status_overlay_update_nanos = next_stop_nanos
+
     if active_state == "CHARGING":
         target_visual_state = "OPEN"
-    elif active_state == "EXPERIMENT":
+    elif active_state in ("EXPERIMENT", "GNSS_FIX", "DOWNLINK"):
         target_visual_state = "CLOSED"
     else:
         target_visual_state = current_visual_state
@@ -889,6 +1162,21 @@ if sampled_time_experiment_nanos > 0:
     print(f"[UPTIME]   EARTH_NOT_VISIBLE:    {exp_earth_fail_pct:6.2f}%")
     print(f"[UPTIME]   SUN_KEEPOUT_VIOLATION:{exp_sun_fail_pct:6.2f}%")
     print("[UPTIME]   Note: percentages can overlap when both FOUND conditions fail at once.")
+
+print("[UPTIME] State-by-state availability summary:")
+for state_name in STATE_NAMES:
+    state_time_nanos = sampled_time_by_state_nanos[state_name]
+    if state_time_nanos <= 0:
+        print(f"[UPTIME]   {state_name:>9}: not visited")
+        continue
+
+    state_time_pct = 100.0 * state_time_nanos / sampled_time_nanos
+    state_lost_pct = 100.0 * lost_uptime_by_state_nanos[state_name] / state_time_nanos
+    state_found_pct = 100.0 * found_uptime_by_state_nanos[state_name] / state_time_nanos
+    print(
+        f"[UPTIME]   {state_name:>9}: time={state_time_pct:6.2f}% "
+        f"LOST={state_lost_pct:6.2f}% FOUND={state_found_pct:6.2f}%"
+    )
 
 plot_paths = _generate_uptime_plots(save_path, uptime_history)
 if plot_paths:

@@ -397,6 +397,8 @@ def changeLocation(
                 f"fieldOfView must be a value between 0 and Pi, not {fieldOfView}"
             )
         vizElement.fieldOfView = fieldOfView
+    if label is not None:
+        vizElement.label = label
 
     # add this location structure to the vector of locations to be transmitted to Vizard
     locationDict[stationName] = vizElement

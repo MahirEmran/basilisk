@@ -29,6 +29,12 @@ RollSolveResult solveRollForLostClearance(const double x_B[3],
                                           bool hasPrevRoll,
                                           double prevRollDeg);
 
+bool buildFrameForMinusZTarget(const double minusZTargetHat[3],
+                               const double xHintHat[3],
+                               double outX_B[3],
+                               double outY_B[3],
+                               double outZ_B[3]);
+
 }  // namespace ActiveGuidanceMath
 
 #endif

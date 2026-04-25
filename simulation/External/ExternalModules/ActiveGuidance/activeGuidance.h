@@ -9,6 +9,7 @@
 #include "architecture/utilities/bskLogging.h"
 
 #include <string>
+#include <vector>
 
 class ActiveGuidance : public SysModel {
 public:
@@ -34,10 +35,18 @@ public:
     void setStatusPeriodSec(double valueSec);
     double getStatusPeriodSec() const;
 
+    void setGnssFixPeriodSec(double valueSec);
+    void setGnssFixDurationSec(double valueSec);
+    void setGnssZenithHalfAngleDeg(double valueDeg);
+    void setGnssDeadReckoningSec(double valueSec);
+    void setDownlinkWindowSec(double valueSec);
+    void setGroundStationsCsv(const std::string& stationsCsv);
+
     void setPosFound_B(double x_m, double y_m, double z_m);
     void setDefaultSunHat_N(double x, double y, double z);
 
     std::string getState() const;
+    std::string getActiveGroundStation() const;
 
 private:
     enum GuidanceMode {
@@ -64,6 +73,31 @@ private:
     uint64_t lastStatusPrintNanos = 0U;                     //!< [ns] last status print time
     bool hasPrintedStatus = false;
 
+    uint64_t gnssFixPeriodNanos = 600000000000ULL;          //!< [ns] periodic GNSS fix interval while in experiment context (10 min default)
+    uint64_t gnssFixDurationNanos = 60000000000ULL;         //!< [ns] time spent in GNSS_FIX when a fix cycle starts
+    double gnssZenithHalfAngleDeg = 45.0;                   //!< [deg] GNSS reception cone half-angle away from zenith
+    uint64_t gnssDeadReckoningNanos = 900000000000ULL;      //!< [ns] maximum dead-reckoning time before GNSS fix is forced
+    uint64_t nextGnssFixNanos = 0U;                         //!< [ns] next scheduled GNSS fix start
+    uint64_t gnssFixEndNanos = 0U;                          //!< [ns] active GNSS fix end time
+    uint64_t lastGnssGoodNanos = 0U;                        //!< [ns] last timestamp where antenna was inside GNSS zenith cone
+    bool hasGnssGoodTimestamp = false;                      //!< [-] indicates lastGnssGoodNanos is initialized
+    bool gnssFixScheduleInitialized = false;                //!< [-] indicates GNSS schedule has been initialized
+
+    uint64_t downlinkWindowNanos = 420000000000ULL;         //!< [ns] max downlink dwell per visibility window (7 min default)
+    uint64_t downlinkWindowEndNanos = 0U;                   //!< [ns] current downlink window end
+    bool downlinkWindowActive = false;                      //!< [-] true while downlink window is active
+    std::string downlinkWindowStation = "";                  //!< [-] label of station assigned to active downlink window
+    std::string activeGroundStation = "NONE";                //!< [-] label of station currently selected for downlink
+    bool hadVisibleStationLastStep = false;                 //!< [-] visibility edge detector for downlink window triggering
+    std::string lastVisibleStationLabel = "";                //!< [-] station label from previous visibility sample
+
+    struct GroundStation {
+        std::string label;                                  //!< [-] station identifier
+        double latRad;                                      //!< [rad] geodetic latitude approximation
+        double lonRad;                                      //!< [rad] east longitude at epoch
+    };
+    std::vector<GroundStation> groundStations;              //!< [-] configured ground stations for downlink scheduling
+
     double prevRollDeg = 0.0;                               //!< [deg] previous chosen roll (used to prefer smooth roll continuity)
     bool hasPrevRoll = false;
 
@@ -71,6 +105,10 @@ private:
 
     void refreshThresholds();
     void writeIdentityReference(uint64_t CurrentSimNanos);
+    bool selectVisibleGroundStation(const double scPos_N[3],
+                                    uint64_t CurrentSimNanos,
+                                    std::string* stationLabel,
+                                    double stationLosHat_N[3]) const;
 };
 
 #endif

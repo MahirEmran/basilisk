@@ -225,4 +225,49 @@ RollSolveResult solveRollForLostClearance(const double x_B[3],
     return result;
 }
 
+bool buildFrameForMinusZTarget(const double minusZTargetHat[3],
+                               const double xHintHat[3],
+                               double outX_B[3],
+                               double outY_B[3],
+                               double outZ_B[3])
+{
+    double minusZHat[3] = {0.0, 0.0, 0.0};
+    if (!safeUnit(minusZTargetHat, minusZHat)) {
+        return false;
+    }
+
+    // Antenna boresight is -Z, so body +Z points opposite the target direction.
+    outZ_B[0] = -minusZHat[0];
+    outZ_B[1] = -minusZHat[1];
+    outZ_B[2] = -minusZHat[2];
+
+    const double xHintProjection = dot3(xHintHat, outZ_B);
+    outX_B[0] = xHintHat[0] - xHintProjection * outZ_B[0];
+    outX_B[1] = xHintHat[1] - xHintProjection * outZ_B[1];
+    outX_B[2] = xHintHat[2] - xHintProjection * outZ_B[2];
+
+    if (!safeUnit(outX_B, outX_B)) {
+        double fallback[3] = {1.0, 0.0, 0.0};
+        if (std::fabs(outZ_B[0]) >= 0.9) {
+            fallback[0] = 0.0;
+            fallback[1] = 1.0;
+        }
+
+        const double fallbackProjection = dot3(fallback, outZ_B);
+        outX_B[0] = fallback[0] - fallbackProjection * outZ_B[0];
+        outX_B[1] = fallback[1] - fallbackProjection * outZ_B[1];
+        outX_B[2] = fallback[2] - fallbackProjection * outZ_B[2];
+        if (!safeUnit(outX_B, outX_B)) {
+            return false;
+        }
+    }
+
+    cross3(outZ_B, outX_B, outY_B);
+    if (!safeUnit(outY_B, outY_B)) {
+        return false;
+    }
+
+    return true;
+}
+
 }  // namespace ActiveGuidanceMath

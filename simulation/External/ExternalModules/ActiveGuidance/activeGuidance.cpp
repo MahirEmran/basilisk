@@ -4,15 +4,80 @@
 #include "architecture/utilities/rigidBodyKinematics.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <sstream>
 #include <vector>
 
 namespace {
 constexpr double kEarthRadiusKm = 6371.0;                           // [km]
 constexpr double kOrbitAltitudeKm = 400.0;                          // [km]
 constexpr double kPi = 3.14159265358979323846;                      // [rad]
+constexpr double kDeg2Rad = kPi / 180.0;                            // [rad/deg]
 constexpr double kRad2Deg = 180.0 / kPi;                            // [deg/rad]
 constexpr double kValidStatePosFloorM = 1.0;                        // [m]
+constexpr double kEarthRadiusM = 6371000.0;                         // [m]
+constexpr double kEarthRotationRateRadPerSec = 7.2921159e-5;        // [rad/s]
+constexpr double kSecondsToNanos = 1.0e9;                           // [ns/s]
+
+std::string trimWhitespace(const std::string& value)
+{
+    const auto isSpace = [](unsigned char character) {
+        return std::isspace(character) != 0;
+    };
+
+    size_t first = 0U;
+    while (first < value.size() && isSpace(static_cast<unsigned char>(value[first]))) {
+        ++first;
+    }
+
+    size_t last = value.size();
+    while (last > first && isSpace(static_cast<unsigned char>(value[last - 1U]))) {
+        --last;
+    }
+
+    return value.substr(first, last - first);
+}
+
+bool parseStationToken(const std::string& token,
+                       std::string* label,
+                       double* latRad,
+                       double* lonRad)
+{
+    std::stringstream tokenStream(token);
+    std::string labelRaw;
+    std::string latRaw;
+    std::string lonRaw;
+
+    if (!std::getline(tokenStream, labelRaw, ':')) {
+        return false;
+    }
+    if (!std::getline(tokenStream, latRaw, ':')) {
+        return false;
+    }
+    if (!std::getline(tokenStream, lonRaw, ':')) {
+        return false;
+    }
+
+    labelRaw = trimWhitespace(labelRaw);
+    latRaw = trimWhitespace(latRaw);
+    lonRaw = trimWhitespace(lonRaw);
+
+    if (labelRaw.empty() || latRaw.empty() || lonRaw.empty()) {
+        return false;
+    }
+
+    try {
+        const double latDeg = std::stod(latRaw);                    // [deg]
+        const double lonDeg = std::stod(lonRaw);                    // [deg]
+        *label = labelRaw;
+        *latRad = latDeg * kDeg2Rad;                                // [rad]
+        *lonRad = lonDeg * kDeg2Rad;                                // [rad]
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 }  // namespace
 
@@ -37,6 +102,16 @@ void ActiveGuidance::Reset(uint64_t CurrentSimNanos)
     this->state = "UNINITIALIZED";
     this->lastStatusPrintNanos = CurrentSimNanos;
     this->hasPrintedStatus = false;
+    this->activeGroundStation = "NONE";
+    this->downlinkWindowActive = false;
+    this->downlinkWindowStation.clear();
+    this->hadVisibleStationLastStep = false;
+    this->lastVisibleStationLabel.clear();
+    this->gnssFixScheduleInitialized = false;
+    this->nextGnssFixNanos = 0U;
+    this->gnssFixEndNanos = 0U;
+    this->lastGnssGoodNanos = CurrentSimNanos;
+    this->hasGnssGoodTimestamp = false;
 
     this->writeIdentityReference(CurrentSimNanos);
 
@@ -178,8 +253,9 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
 
     double x_B[3] = {rollOnlyX_B[0], rollOnlyX_B[1], rollOnlyX_B[2]};
     ActiveGuidanceMath::RollSolveResult selectedRoll = rollOnlyResult;
-    const char* selectedState = "CHARGING";
+    std::string selectedState = "CHARGING";
     bool selectedIsCharging = true;
+    this->activeGroundStation = "NONE";
 
     auto copyRollResult = [](const ActiveGuidanceMath::RollSolveResult& src,
                              ActiveGuidanceMath::RollSolveResult* dst) {
@@ -193,28 +269,26 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         dst->z_B[2] = src.z_B[2];
     };
 
+    auto assignFrameSolution = [&](const double frameX_B[3],
+                                   const double frameY_B[3],
+                                   const double frameZ_B[3]) {
+        x_B[0] = frameX_B[0];
+        x_B[1] = frameX_B[1];
+        x_B[2] = frameX_B[2];
+        selectedRoll.rollDeg = 0.0;                                 // [deg]
+        selectedRoll.scoreDeg = rollOnlyResult.scoreDeg;            // [deg]
+        selectedRoll.y_B[0] = frameY_B[0];
+        selectedRoll.y_B[1] = frameY_B[1];
+        selectedRoll.y_B[2] = frameY_B[2];
+        selectedRoll.z_B[0] = frameZ_B[0];
+        selectedRoll.z_B[1] = frameZ_B[1];
+        selectedRoll.z_B[2] = frameZ_B[2];
+    };
+
+    bool experimentContext = false;
+
     if (this->mode == MODE_EXPERIMENT) {
-        // EXPERIMENT +X target:
-        // 1) stay on Earth-limb cone (FOUND keeps Earth near desired view),
-        // 2) bias azimuth away from Sun.
-        ActiveGuidanceMath::computeCompromiseX(earthHat_found, sunHat_found, this->rhoRad, x_B);
-        std::vector<const double*> experimentExtras;
-        if (hasMoonHat) {
-            // Include Moon in LOST keep-out optimization when available.
-            experimentExtras.push_back(moonHat_sc);
-        }
-        const ActiveGuidanceMath::RollSolveResult experimentRoll = ActiveGuidanceMath::solveRollForLostClearance(
-            x_B,
-            earthHat_sc,
-            sunHat_sc,
-            experimentExtras,
-            this->hasPrevRoll,
-            this->prevRollDeg
-        );
-        copyRollResult(experimentRoll, &selectedRoll);
-        // Here scoreDeg is computed against Earth/Sun/(Moon if available).
-        selectedState = "EXPERIMENT";
-        selectedIsCharging = false;
+        experimentContext = true;
     } else if (this->mode == MODE_HYBRID) {
         bool chargingExitBand = (this->state == "CHARGING");
         const double clearThresholdDeg = chargingExitBand ? this->chargeExitClearDeg : this->chargeEnterClearDeg;
@@ -235,9 +309,48 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
             x_B[2] = rollOnlyX_B[2];
             copyRollResult(rollOnlyResult, &selectedRoll);
         } else {
-            selectedState = "EXPERIMENT";
-            selectedIsCharging = false;
-            // Fall back to EXPERIMENT geometry when CHARGING constraints are not met.
+            experimentContext = true;
+        }
+    }
+
+    if (experimentContext) {
+        selectedIsCharging = false;
+
+        if (!this->hasGnssGoodTimestamp) {
+            this->lastGnssGoodNanos = CurrentSimNanos;
+            this->hasGnssGoodTimestamp = true;
+        }
+
+        const bool deadReckoningExceeded =
+            (CurrentSimNanos - this->lastGnssGoodNanos) >= this->gnssDeadReckoningNanos;
+
+        if (!this->gnssFixScheduleInitialized) {
+            this->nextGnssFixNanos = CurrentSimNanos + this->gnssFixPeriodNanos;
+            this->gnssFixScheduleInitialized = true;
+        }
+
+        if (this->gnssFixEndNanos > 0U && CurrentSimNanos >= this->gnssFixEndNanos) {
+            this->gnssFixEndNanos = 0U;
+        }
+
+        if (this->gnssFixEndNanos == 0U &&
+            (CurrentSimNanos >= this->nextGnssFixNanos || deadReckoningExceeded)) {
+            this->gnssFixEndNanos = CurrentSimNanos + this->gnssFixDurationNanos;
+            this->nextGnssFixNanos = CurrentSimNanos + this->gnssFixPeriodNanos;
+        }
+
+        if (this->gnssFixEndNanos > CurrentSimNanos) {
+            // GNSS_FIX state: antenna (-Z) points to zenith to maximize sky view.
+            double minusZTargetHat[3] = {-earthHat_sc[0], -earthHat_sc[1], -earthHat_sc[2]};
+            double gnssX_B[3] = {0.0, 0.0, 0.0};
+            double gnssY_B[3] = {0.0, 0.0, 0.0};
+            double gnssZ_B[3] = {0.0, 0.0, 0.0};
+            if (ActiveGuidanceMath::buildFrameForMinusZTarget(minusZTargetHat, sunHat_sc, gnssX_B, gnssY_B, gnssZ_B)) {
+                assignFrameSolution(gnssX_B, gnssY_B, gnssZ_B);
+                selectedState = "GNSS_FIX";
+            }
+        } else {
+            // EXPERIMENT base geometry when GNSS fix is not currently active.
             ActiveGuidanceMath::computeCompromiseX(earthHat_found, sunHat_found, this->rhoRad, x_B);
             std::vector<const double*> experimentExtras;
             if (hasMoonHat) {
@@ -252,7 +365,94 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
                 this->prevRollDeg
             );
             copyRollResult(experimentRoll, &selectedRoll);
+            selectedState = "EXPERIMENT";
+
+            std::string visibleStation;
+            double visibleLosHat_N[3] = {0.0, 0.0, 0.0};
+            const bool hasVisibleStation = this->selectVisibleGroundStation(
+                r_N,
+                CurrentSimNanos,
+                &visibleStation,
+                visibleLosHat_N
+            );
+
+            if (this->downlinkWindowActive) {
+                const bool windowExpired = CurrentSimNanos >= this->downlinkWindowEndNanos;
+                const bool stationStillVisible = hasVisibleStation && (visibleStation == this->downlinkWindowStation);
+                if (windowExpired || !stationStillVisible) {
+                    this->downlinkWindowActive = false;
+                    this->downlinkWindowStation.clear();
+                }
+            }
+
+            const bool visibilityRisingEdge =
+                hasVisibleStation &&
+                (!this->hadVisibleStationLastStep || visibleStation != this->lastVisibleStationLabel);
+
+            if (!this->downlinkWindowActive && visibilityRisingEdge) {
+                this->downlinkWindowActive = true;
+                this->downlinkWindowStation = visibleStation;
+                this->downlinkWindowEndNanos = CurrentSimNanos + this->downlinkWindowNanos;
+            }
+
+            if (this->downlinkWindowActive) {
+                std::string activeLabel;
+                double activeLosHat_N[3] = {0.0, 0.0, 0.0};
+                const bool activeVisible = this->selectVisibleGroundStation(
+                    r_N,
+                    CurrentSimNanos,
+                    &activeLabel,
+                    activeLosHat_N
+                );
+
+                if (activeVisible && activeLabel == this->downlinkWindowStation) {
+                    double downlinkX_B[3] = {0.0, 0.0, 0.0};
+                    double downlinkY_B[3] = {0.0, 0.0, 0.0};
+                    double downlinkZ_B[3] = {0.0, 0.0, 0.0};
+                    if (ActiveGuidanceMath::buildFrameForMinusZTarget(
+                            activeLosHat_N,
+                            sunHat_sc,
+                            downlinkX_B,
+                            downlinkY_B,
+                            downlinkZ_B)) {
+                        assignFrameSolution(downlinkX_B, downlinkY_B, downlinkZ_B);
+                        selectedState = "DOWNLINK";
+                        this->activeGroundStation = this->downlinkWindowStation;
+                    }
+                }
+            }
+
+            this->hadVisibleStationLastStep = hasVisibleStation;
+            this->lastVisibleStationLabel = hasVisibleStation ? visibleStation : "";
         }
+    } else {
+        // GNSS fixing is only required during experiment context.
+        this->gnssFixScheduleInitialized = false;
+        this->nextGnssFixNanos = 0U;
+        this->gnssFixEndNanos = 0U;
+        this->hasGnssGoodTimestamp = false;
+
+        this->downlinkWindowActive = false;
+        this->downlinkWindowStation.clear();
+        this->hadVisibleStationLastStep = false;
+        this->lastVisibleStationLabel.clear();
+    }
+
+    double antennaHat_N[3] = {
+        -selectedRoll.z_B[0],
+        -selectedRoll.z_B[1],
+        -selectedRoll.z_B[2]
+    };
+    double zenithHat_sc[3] = {
+        -earthHat_sc[0],
+        -earthHat_sc[1],
+        -earthHat_sc[2]
+    };
+    const double antennaZenithAngleDeg = ActiveGuidanceMath::angleDegBetween(antennaHat_N, zenithHat_sc);
+
+    if (experimentContext && antennaZenithAngleDeg <= this->gnssZenithHalfAngleDeg) {
+        this->lastGnssGoodNanos = CurrentSimNanos;
+        this->hasGnssGoodTimestamp = true;
     }
 
     if (this->state != selectedState) {
@@ -260,11 +460,13 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         const char* panelCmd = selectedIsCharging ? "OPEN" : "STOW";
         this->bskLogger.bskLog(
             BSK_INFORMATION,
-            "[ADCS] t=%8.1fs -> %s (roll-only LOST clearance=%5.1f deg, panel cmd=%s)",
+            "[ADCS] t=%8.1fs -> %s (roll-only LOST clearance=%5.1f deg, panel cmd=%s, station=%s, zenith-angle=%5.1f deg)",
             tSec,
-            selectedState,
+            selectedState.c_str(),
             rollOnlyResult.scoreDeg,
-            panelCmd
+            panelCmd,
+            this->activeGroundStation.c_str(),
+            antennaZenithAngleDeg
         );
     }
 
@@ -275,12 +477,14 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
             const char* panelCmd = selectedIsCharging ? "OPEN" : "STOW";
             this->bskLogger.bskLog(
                 BSK_INFORMATION,
-                "[HYBRID] t=%8.1fs active=%s panel=%s roll-only-clearance=%5.1f deg sun-earth-angle=%5.1f deg",
+                "[HYBRID] t=%8.1fs active=%s panel=%s station=%s roll-only-clearance=%5.1f deg sun-earth-angle=%5.1f deg zenith-angle=%5.1f deg",
                 tSec,
-                selectedState,
+                selectedState.c_str(),
                 panelCmd,
+                this->activeGroundStation.c_str(),
                 rollOnlyResult.scoreDeg,
-                sunEarthAngleDeg
+                sunEarthAngleDeg,
+                antennaZenithAngleDeg
             );
             this->lastStatusPrintNanos = CurrentSimNanos;
             this->hasPrintedStatus = true;
@@ -374,12 +578,93 @@ void ActiveGuidance::setStatusPeriodSec(double valueSec)
         return;
     }
 
-    this->statusPeriodNanos = static_cast<uint64_t>(valueSec * 1.0e9);  // [ns]
+    this->statusPeriodNanos = static_cast<uint64_t>(valueSec * kSecondsToNanos);  // [ns]
 }
 
 double ActiveGuidance::getStatusPeriodSec() const
 {
     return static_cast<double>(this->statusPeriodNanos) * 1.0e-9;  // [s]
+}
+
+void ActiveGuidance::setGnssFixPeriodSec(double valueSec)
+{
+    if (valueSec <= 0.0) {
+        this->bskLogger.bskLog(BSK_ERROR, "ActiveGuidance: GNSS fix period must be > 0 s.");
+        return;
+    }
+
+    this->gnssFixPeriodNanos = static_cast<uint64_t>(valueSec * kSecondsToNanos);  // [ns]
+}
+
+void ActiveGuidance::setGnssFixDurationSec(double valueSec)
+{
+    if (valueSec <= 0.0) {
+        this->bskLogger.bskLog(BSK_ERROR, "ActiveGuidance: GNSS fix duration must be > 0 s.");
+        return;
+    }
+
+    this->gnssFixDurationNanos = static_cast<uint64_t>(valueSec * kSecondsToNanos);  // [ns]
+}
+
+void ActiveGuidance::setGnssZenithHalfAngleDeg(double valueDeg)
+{
+    if (valueDeg <= 0.0 || valueDeg > 90.0) {
+        this->bskLogger.bskLog(BSK_ERROR, "ActiveGuidance: GNSS zenith half-angle must be in (0, 90] deg.");
+        return;
+    }
+
+    this->gnssZenithHalfAngleDeg = valueDeg;
+}
+
+void ActiveGuidance::setGnssDeadReckoningSec(double valueSec)
+{
+    if (valueSec <= 0.0) {
+        this->bskLogger.bskLog(BSK_ERROR, "ActiveGuidance: GNSS dead-reckoning horizon must be > 0 s.");
+        return;
+    }
+
+    this->gnssDeadReckoningNanos = static_cast<uint64_t>(valueSec * kSecondsToNanos);  // [ns]
+}
+
+void ActiveGuidance::setDownlinkWindowSec(double valueSec)
+{
+    if (valueSec <= 0.0) {
+        this->bskLogger.bskLog(BSK_ERROR, "ActiveGuidance: downlink window must be > 0 s.");
+        return;
+    }
+
+    this->downlinkWindowNanos = static_cast<uint64_t>(valueSec * kSecondsToNanos);  // [ns]
+}
+
+void ActiveGuidance::setGroundStationsCsv(const std::string& stationsCsv)
+{
+    this->groundStations.clear();
+
+    const std::string trimmedCsv = trimWhitespace(stationsCsv);
+    if (trimmedCsv.empty()) {
+        return;
+    }
+
+    std::stringstream csvStream(trimmedCsv);
+    std::string token;
+    while (std::getline(csvStream, token, ';')) {
+        const std::string trimmedToken = trimWhitespace(token);
+        if (trimmedToken.empty()) {
+            continue;
+        }
+
+        GroundStation station = {};
+        if (!parseStationToken(trimmedToken, &station.label, &station.latRad, &station.lonRad)) {
+            this->bskLogger.bskLog(
+                BSK_ERROR,
+                "ActiveGuidance: invalid ground station token '%s'. Expected label:lat_deg:lon_deg.",
+                trimmedToken.c_str()
+            );
+            continue;
+        }
+
+        this->groundStations.push_back(station);
+    }
 }
 
 void ActiveGuidance::setPosFound_B(double x_m, double y_m, double z_m)
@@ -400,6 +685,94 @@ void ActiveGuidance::setDefaultSunHat_N(double x, double y, double z)
 std::string ActiveGuidance::getState() const
 {
     return this->state;
+}
+
+std::string ActiveGuidance::getActiveGroundStation() const
+{
+    return this->activeGroundStation;
+}
+
+bool ActiveGuidance::selectVisibleGroundStation(const double scPos_N[3],
+                                                uint64_t CurrentSimNanos,
+                                                std::string* stationLabel,
+                                                double stationLosHat_N[3]) const
+{
+    if (this->groundStations.empty()) {
+        return false;
+    }
+
+    const double tSec = static_cast<double>(CurrentSimNanos) * 1.0e-9;                 // [s]
+    const double earthThetaRad = kEarthRotationRateRadPerSec * tSec;                   // [rad]
+    const double cosTheta = std::cos(earthThetaRad);
+    const double sinTheta = std::sin(earthThetaRad);
+
+    bool hasVisibleStation = false;
+    double bestElevationProxy = -2.0;
+
+    for (const GroundStation& station : this->groundStations) {
+        const double cosLat = std::cos(station.latRad);
+        const double sinLat = std::sin(station.latRad);
+        const double cosLon = std::cos(station.lonRad);
+        const double sinLon = std::sin(station.lonRad);
+
+        const double stationPosEcef[3] = {
+            kEarthRadiusM * cosLat * cosLon,
+            kEarthRadiusM * cosLat * sinLon,
+            kEarthRadiusM * sinLat
+        };
+
+        // Approximate Earth-fixed station drift in inertial frame using a simple z-axis rotation.
+        const double stationPos_N[3] = {
+            cosTheta * stationPosEcef[0] - sinTheta * stationPosEcef[1],
+            sinTheta * stationPosEcef[0] + cosTheta * stationPosEcef[1],
+            stationPosEcef[2]
+        };
+
+        double stationZenithHat_N[3] = {0.0, 0.0, 0.0};
+        if (!ActiveGuidanceMath::safeUnit(stationPos_N, stationZenithHat_N)) {
+            continue;
+        }
+
+        const double stationToSc_N[3] = {
+            scPos_N[0] - stationPos_N[0],
+            scPos_N[1] - stationPos_N[1],
+            scPos_N[2] - stationPos_N[2]
+        };
+        double stationToScHat_N[3] = {0.0, 0.0, 0.0};
+        if (!ActiveGuidanceMath::safeUnit(stationToSc_N, stationToScHat_N)) {
+            continue;
+        }
+
+        const double elevationProxy =
+            stationZenithHat_N[0] * stationToScHat_N[0] +
+            stationZenithHat_N[1] * stationToScHat_N[1] +
+            stationZenithHat_N[2] * stationToScHat_N[2];
+
+        if (elevationProxy <= 0.0) {
+            continue;
+        }
+
+        const double scToStation_N[3] = {
+            stationPos_N[0] - scPos_N[0],
+            stationPos_N[1] - scPos_N[1],
+            stationPos_N[2] - scPos_N[2]
+        };
+        double scToStationHat_N[3] = {0.0, 0.0, 0.0};
+        if (!ActiveGuidanceMath::safeUnit(scToStation_N, scToStationHat_N)) {
+            continue;
+        }
+
+        if (!hasVisibleStation || elevationProxy > bestElevationProxy) {
+            hasVisibleStation = true;
+            bestElevationProxy = elevationProxy;
+            *stationLabel = station.label;
+            stationLosHat_N[0] = scToStationHat_N[0];
+            stationLosHat_N[1] = scToStationHat_N[1];
+            stationLosHat_N[2] = scToStationHat_N[2];
+        }
+    }
+
+    return hasVisibleStation;
 }
 
 void ActiveGuidance::refreshThresholds()

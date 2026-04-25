@@ -140,6 +140,85 @@ This README focuses on integration mechanics.
 
 For algorithm-specific theory, assumptions, and equations, document details in `yourModule.rst` next to implementation code.
 
+## 2.1 ActiveGuidance LOST/FOUND Body-Avoidance Math
+
+For the HuskySat `activeGuidance` module, these are the core body-avoidance math checks used by uptime and mode logic.
+
+Reference vectors and frames:
+
+1. LOST boresight is body `+Z`.
+2. FOUND boresight is body `+X`.
+3. Earth/Sun/Moon line-of-sight vectors are built in inertial frame from the sensor location (FOUND uses camera-offset position, not COM).
+
+Line-of-sight unit vector from sensor point `p_s` to body point `p_b`:
+
+```text
+l_hat = (p_b - p_s) / ||p_b - p_s||
+```
+
+Angular separation between unit vectors `a_hat` and `b_hat`:
+
+```text
+ang(a_hat, b_hat) = acos( clamp(a_hat dot b_hat, -1, 1) )
+```
+
+### LOST keep-out (avoid bright bodies)
+
+Let `z_LOST` be LOST boresight (`+Z` in inertial coordinates after attitude is applied).
+LOST is valid only if all keep-out constraints hold:
+
+```text
+ang(z_LOST, earth_hat) >= theta_lost_excl
+ang(z_LOST, sun_hat)   >= theta_lost_excl
+ang(z_LOST, moon_hat)  >= theta_lost_excl   (when moon is enabled)
+```
+
+In roll-search states, roll is chosen by maximizing the worst-body clearance:
+
+```text
+score_roll = max_roll  min_i ang(z_LOST(roll), body_i_hat)
+```
+
+### FOUND keep-in / keep-out
+
+Let `x_FOUND` be FOUND boresight (`+X` in inertial coordinates).
+FOUND is valid when Earth is in FOV and Sun is outside FOV:
+
+```text
+ang(x_FOUND, earth_hat) <= theta_found_half + theta_earth
+ang(x_FOUND, sun_hat)   >= theta_found_half
+```
+
+Earth apparent half-angle is orbit dependent:
+
+```text
+theta_earth = asin( R_earth / (R_earth + h) )
+```
+
+### EXPERIMENT target cone and Sun bias
+
+The EXPERIMENT `+X` target lies on the Earth-limb cone and is azimuth-biased away from Sun:
+
+```text
+rho = asin( R_earth / (R_earth + h) )
+x_target = cos(rho)*earth_hat + sin(rho)*u2_hat
+```
+
+where `u2_hat` is the normalized anti-Sun direction projected into the plane orthogonal to `earth_hat`.
+
+### CHARGING gate in HYBRID (hysteresis)
+
+HYBRID enters CHARGING only when roll-only LOST margin and Sun visibility are both healthy:
+
+```text
+score_roll_only >= theta_lost_excl + 2 deg      (enter)
+sun_earth_angle >= theta_earth + 2 deg          (enter)
+score_roll_only >= theta_lost_excl - 1 deg      (exit band)
+sun_earth_angle >= theta_earth - 1 deg          (exit band)
+```
+
+This hysteresis prevents rapid CHARGING/EXPERIMENT switching near boundaries.
+
 ## 3. Build Pipeline Details (How Import Works)
 
 At build time:
