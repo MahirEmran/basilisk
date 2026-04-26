@@ -1,0 +1,1 @@
+- Added visible white solar-cell tiles to the CubeSat Vizard model, enabled the built-in battery storage HUD, and added an optional sqrt-compressed live telemetry plot that is disabled by default in `build.sh`.

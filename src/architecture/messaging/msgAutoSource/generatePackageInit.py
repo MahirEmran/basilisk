@@ -12,6 +12,9 @@ if __name__ == "__main__":
     mainImportFid = open(moduleOutputPath + '/__init__.py', 'w')
     for i in range(2, len(sys.argv)):
         headerInputPath = sys.argv[i]
+        # External module directories are optional; skip any that are absent.
+        if not os.path.isdir(headerInputPath):
+            continue
         for filePre in os.listdir(headerInputPath):
             if(filePre.endswith(".h") or filePre.endswith(".hpp")):
                 className = os.path.splitext(filePre)[0]

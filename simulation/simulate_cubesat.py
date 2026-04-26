@@ -29,6 +29,7 @@ from vizard_scene import (
     add_vizard_scene_overlays,
     add_spacecraft_status_overlay,
     update_spacecraft_status_overlay,
+    create_battery_storage_panel,
 )
 
 
@@ -250,6 +251,95 @@ def _write_uptime_points_csv(save_path, history):
     return csv_path
 
 
+class LiveTelemetryPlot:
+    """Small live plot window for power, battery charge, and temperature history."""
+
+    def __init__(self, enabled, compression_power=0.5):
+        """Initialize the live plot window if a GUI matplotlib backend is available."""
+        self.enabled = bool(enabled)
+        self.compression_power = float(compression_power)
+        self.times_hr = []
+        self.net_power_w = []
+        self.soc_pct = []
+        self.temp_c = []
+        self.state_text = "init"
+        self._plt = None
+        self._fig = None
+        self._axes = None
+        self._power_line = None
+        self._soc_line = None
+        self._temp_line = None
+
+        if not self.enabled:
+            return
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:
+            print(f"[PLOT] Live telemetry window disabled (matplotlib unavailable): {exc}")
+            return
+
+        try:
+            plt.ion()
+            self._plt = plt
+            self._fig, self._axes = plt.subplots(3, 1, figsize=(7.6, 7.2), sharex=True)
+            self._fig.suptitle("Live EPS / Thermal Telemetry")
+
+            self._power_line, = self._axes[0].plot([], [], color="tab:red", linewidth=1.6)
+            self._soc_line, = self._axes[1].plot([], [], color="tab:green", linewidth=1.6)
+            self._temp_line, = self._axes[2].plot([], [], color="tab:blue", linewidth=1.6)
+
+            self._axes[0].set_ylabel("Net Power [W]")
+            self._axes[1].set_ylabel("SOC [%]")
+            self._axes[2].set_ylabel("Temp [C]")
+            self._axes[2].set_xlabel("Time [h]")
+            self._axes[0].grid(True, alpha=0.25)
+            self._axes[1].grid(True, alpha=0.25)
+            self._axes[2].grid(True, alpha=0.25)
+            self._axes[0].set_title("Mission state: init")
+            self._fig.tight_layout()
+            self._fig.show()
+            self.enabled = True
+        except Exception as exc:
+            print(f"[PLOT] Live telemetry window disabled (GUI backend unavailable): {exc}")
+
+    def update(self, time_sec, net_power_w, soc_pct, temp_c, mission_state):
+        """Append one telemetry sample and refresh the live plot window."""
+        if not self.enabled:
+            return
+
+        time_hr = float(time_sec) / 3600.0
+        self.times_hr.append(time_hr)
+        self.net_power_w.append(float(net_power_w))
+        self.soc_pct.append(float(soc_pct))
+        self.temp_c.append(float(temp_c))
+        self.state_text = "UNKNOWN" if mission_state is None else str(mission_state)
+
+        x_plot = np.power(np.maximum(np.asarray(self.times_hr, dtype=float), 0.0), self.compression_power)
+        self._power_line.set_data(x_plot, self.net_power_w)
+        self._soc_line.set_data(x_plot, self.soc_pct)
+        self._temp_line.set_data(x_plot, self.temp_c)
+
+        for axis in self._axes:
+            axis.relim()
+            axis.autoscale_view()
+            axis.grid(True, alpha=0.25)
+
+        self._axes[0].set_title(f"Mission state: {self.state_text.replace('_', ' ')}")
+        self._axes[2].set_xlabel("Time [h] (sqrt-compressed)")
+        max_time_hr = max(self.times_hr) if self.times_hr else 0.0
+        max_plot_hr = np.power(max(max_time_hr, 1.0e-6), self.compression_power)
+        for axis in self._axes:
+            axis.set_xlim(0.0, max_plot_hr)
+        tick_hours = np.linspace(0.0, max(max_time_hr, 1.0e-6), num=6)
+        tick_positions = np.power(tick_hours, self.compression_power)
+        self._axes[2].set_xticks(tick_positions)
+        self._axes[2].set_xticklabels([f"{tick:.1f}" for tick in tick_hours])
+        self._fig.canvas.draw_idle()
+        self._fig.canvas.flush_events()
+        self._plt.pause(0.001)
+
+
 def parse_cli_args():
     parser = argparse.ArgumentParser(description="Run CubeSat camera simulation with selectable ADCS mode.")
     parser.add_argument(
@@ -353,6 +443,11 @@ def parse_cli_args():
         default=DEFAULT_BIN_PATH,
         help="Output .bin path (including filename). Default: ./output.bin",
     )
+    parser.add_argument(
+        "--enable-plots",
+        action="store_true",
+        help="Enable live telemetry plotting and end-of-run uptime plots.",
+    )
     args = parser.parse_args()
     if args.hours <= 0.0:
         parser.error("--hours must be greater than 0")
@@ -380,6 +475,7 @@ def parse_cli_args():
 
 
 CLI_ARGS = parse_cli_args()
+PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
 
 
 def _create_guidance_module(
@@ -708,9 +804,11 @@ scObject.addDynamicEffector(extFT)
 extFT.cmdTorqueInMsg.subscribeTo(mrpControl.cmdTorqueOutMsg)
 
 payload_power_draw_w = 8.0  # [W]
-battery_capacity_whr = 30.0  # [W*hr]
-battery_initial_charge_whr = 18.0  # [W*hr]
-solar_panel_area_m2 = 0.12  # [m^2]
+battery_capacity_whr = 75.0  # [W*hr]
+battery_initial_charge_whr = 50.0  # [W*hr]
+solar_cell_count = 18.0  # [-]
+solar_cell_area_m2 = 27.0e-4  # [m^2]
+solar_panel_area_m2 = solar_cell_count * solar_cell_area_m2  # [m^2]
 solar_panel_efficiency = 0.29  # [-]
 solar_panel_normal_b = [-1.0, 0.0, 0.0]  # [-]
 sensor_area_m2 = 0.02  # [m^2]
@@ -749,6 +847,11 @@ powerMonitor.addPowerNodeToModel(solarPanel.nodePowerOutMsg)
 powerMonitor.addPowerNodeToModel(payloadPowerSink.nodePowerOutMsg)
 scSim.AddModelToTask(simTaskName, powerMonitor)
 
+battery_storage_reader = messaging.PowerStorageStatusMsgReader()
+battery_storage_reader.subscribeTo(powerMonitor.batPowerOutMsg)
+battery_storage_panel = create_battery_storage_panel(battery_storage_reader)
+viz_storage_list = [[battery_storage_panel]]
+
 thermalSensor = sensorThermal.SensorThermal()
 thermalSensor.ModelTag = "statusSensorThermal"
 thermalSensor.T_0 = sensor_initial_temp_c
@@ -772,7 +875,8 @@ if os.path.exists(save_path):
     os.remove(save_path)  # clear old run so Vizard doesn't load stale data
 
 # Vizard bootstrap is handled in one helper so this file can stay focused on sim logic.
-viz = enable_vizard(scSim, simTaskName, scObject, save_path)
+viz = enable_vizard(scSim, simTaskName, scObject, save_path, generic_storage_list=viz_storage_list)
+live_telemetry_plot = LiveTelemetryPlot(enabled=PLOTS_ENABLED, compression_power=0.5)  # [-]
 
 # Pre-build both visual variants once (OPEN/CLOSED) and hot-swap them during runtime.
 models_dir = os.path.join(os.getcwd(), "models")
@@ -817,8 +921,12 @@ add_vizard_scene_overlays(
     earth_body_name=earth.displayName,
 )
 status_overlay_station = add_spacecraft_status_overlay(viz, scObject.ModelTag)
-status_overlay_update_period_nanos = macros.sec2nano(30.0)
+status_overlay_update_period_sec = 1.0  # [s]
+status_overlay_update_period_nanos = macros.sec2nano(status_overlay_update_period_sec)
 last_status_overlay_update_nanos = None
+live_plot_update_period_sec = 10.0  # [s]
+live_plot_update_period_nanos = macros.sec2nano(live_plot_update_period_sec)
+last_live_plot_update_nanos = None
 
 print(f"Mode: {ADCS_MODE}")
 print(f"Guidance backend: {CLI_ARGS.guidance_backend}")
@@ -1072,6 +1180,23 @@ while next_stop_nanos < stop_time_nanos:
         )
         last_status_overlay_update_nanos = next_stop_nanos
 
+    if PLOTS_ENABLED:
+        should_update_live_plot = (
+            last_live_plot_update_nanos is None
+            or (next_stop_nanos - last_live_plot_update_nanos) >= live_plot_update_period_nanos
+            or state_changed
+            or station_changed
+        )
+        if should_update_live_plot:
+            live_telemetry_plot.update(
+                next_stop_nanos * 1.0e-9,
+                net_power_w=telemetry_net_power_w,
+                soc_pct=telemetry_soc_pct,
+                temp_c=telemetry_temp_c,
+                mission_state=active_state,
+            )
+            last_live_plot_update_nanos = next_stop_nanos
+
     if active_state == "CHARGING":
         target_visual_state = "OPEN"
     elif active_state in ("EXPERIMENT", "GNSS_FIX", "DOWNLINK"):
@@ -1178,13 +1303,14 @@ for state_name in STATE_NAMES:
         f"LOST={state_lost_pct:6.2f}% FOUND={state_found_pct:6.2f}%"
     )
 
-plot_paths = _generate_uptime_plots(save_path, uptime_history)
-if plot_paths:
-    print("[PLOT] Wrote uptime convergence plots:")
-    for path in plot_paths:
-        print(f"[PLOT]   {path}")
+if PLOTS_ENABLED:
+    plot_paths = _generate_uptime_plots(save_path, uptime_history)
+    if plot_paths:
+        print("[PLOT] Wrote uptime convergence plots:")
+        for path in plot_paths:
+            print(f"[PLOT]   {path}")
 
-csv_path = _write_uptime_points_csv(save_path, uptime_history)
-print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+    csv_path = _write_uptime_points_csv(save_path, uptime_history)
+    print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
 
 print(f"Done! Load {save_path} in Vizard.")

@@ -64,9 +64,54 @@ def add_cylinder_triangles(vertices, faces, center, radius, height, n_segs=16):
         faces.append([top_cap, base + n_segs + k1, base + n_segs + k2])
 
 
+def append_component_box(vertices, faces, face_materials, center, size, material_name):
+    """Append a box component and tag all generated faces with one material."""
+    start_face_count = len(faces)
+    add_box_triangles(vertices, faces, center, size)
+    added_face_count = len(faces) - start_face_count
+    if added_face_count > 0:
+        face_materials.extend([material_name] * added_face_count)
+
+
 def add_panel_triangles(vertices, faces, center, size):
     """Append a panel as a thin box."""
     add_box_triangles(vertices, faces, center, size)
+
+
+def add_xz_face_cell_grid(
+    vertices,
+    faces,
+    face_materials,
+    face_center_x_m,
+    face_surface_y_m,
+    face_center_z_m,
+    face_span_x_m,
+    face_span_z_m,
+    cell_span_x_m,
+    cell_span_z_m,
+    cell_thickness_m,
+    n_cols,
+    n_rows,
+    normal_sign,
+    material_name,
+):
+    """Append a grid of solar-cell tiles on a face parallel to the x-z plane."""
+    x_start_m = face_center_x_m - 0.5 * face_span_x_m + 0.5 * cell_span_x_m
+    z_start_m = face_center_z_m - 0.5 * face_span_z_m + 0.5 * cell_span_z_m
+    cell_center_y_m = face_surface_y_m + normal_sign * 0.5 * cell_thickness_m
+
+    for row_idx in range(n_rows):
+        for col_idx in range(n_cols):
+            cell_center_x_m = x_start_m + col_idx * cell_span_x_m
+            cell_center_z_m = z_start_m + row_idx * cell_span_z_m
+            append_component_box(
+                vertices,
+                faces,
+                face_materials,
+                center=[cell_center_x_m, cell_center_y_m, cell_center_z_m],
+                size=[cell_span_x_m, cell_thickness_m, cell_span_z_m],
+                material_name=material_name,
+            )
 
 
 def write_obj(path, vertices, faces, face_materials, panel_open):
@@ -81,6 +126,7 @@ def write_obj(path, vertices, faces, face_materials, panel_open):
             mtl_file.write("newmtl panel_mat\nKd 0.10 0.44 0.92\nKa 0.08 0.10 0.20\nKs 0.03 0.04 0.08\n\n")
         else:
             mtl_file.write("newmtl panel_mat\nKd 0.56 0.56 0.58\nKa 0.24 0.24 0.24\nKs 0.03 0.03 0.03\n\n")
+        mtl_file.write("newmtl cell_mat\nKd 1.00 1.00 1.00\nKa 0.90 0.90 0.90\nKs 0.02 0.02 0.02\n\n")
 
     # Store a face normal for each triangle to keep Vizard lighting stable.
     normals = []
@@ -149,30 +195,95 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("antenna_mat", start_faces)
 
-    # Panel geometry dimensions.
-    panel_thickness = 0.003
-    panel_short_edge = 0.60 * body_size_x_m
-    panel_long_edge = body_size_z_m
-    panel_z_elev = 0.0
+    # Solar-cell tiles are visual only and intentionally do not drive the power model.
+    solar_cell_cols = 2  # [-]
+    solar_cell_rows = 3  # [-]
+    solar_cell_area_m2 = 27.0e-4  # [m^2]
+    solar_cell_span_x_m = 0.030  # [m]
+    solar_cell_span_z_m = solar_cell_area_m2 / solar_cell_span_x_m  # [m]
+    solar_cell_thickness_m = 0.0012  # [m]
+    panel_span_x_m = 0.60 * body_size_x_m  # [m]
+    panel_span_z_m = body_size_z_m  # [m]
+    panel_thickness_m = 0.003  # [m]
+    panel_open_x_m = -0.5 * body_size_x_m - 0.5 * panel_span_x_m  # [m]
+    panel_open_y_m = 0.5 * body_size_y_m + 0.5 * panel_thickness_m  # [m]
+    panel_face_sign = -1.0  # [-]
 
-    # Keep your current open-panel placement exactly as requested.
-    panel_open_x = -0.5 * body_size_x_m - 0.5 * panel_short_edge
-    panel_open_y = 0.5 * body_size_y_m + 0.5 * panel_thickness
-    sign = -1.0
     start_faces = len(faces)
     add_panel_triangles(
         verts,
         faces,
-        center=[panel_open_x, sign * panel_open_y, panel_z_elev],
-        size=[panel_short_edge, panel_thickness, panel_long_edge],
+        center=[panel_open_x_m, panel_face_sign * panel_open_y_m, 0.0],
+        size=[panel_span_x_m, panel_thickness_m, panel_span_z_m],
     )
     add_panel_triangles(
         verts,
         faces,
-        center=[panel_open_x + body_size_y_m + panel_short_edge, sign * panel_open_y, panel_z_elev],
-        size=[panel_short_edge, panel_thickness, panel_long_edge],
+        center=[panel_open_x_m + body_size_y_m + panel_span_x_m, panel_face_sign * panel_open_y_m, 0.0],
+        size=[panel_span_x_m, panel_thickness_m, panel_span_z_m],
     )
     mark_component("panel_mat", start_faces)
+
+    if panels_open:
+        # The deployed panel spans carry 12 of the 18 visible cells.
+        add_xz_face_cell_grid(
+            verts,
+            faces,
+            face_materials,
+            face_center_x_m=panel_open_x_m,
+            face_surface_y_m=panel_face_sign * panel_open_y_m,
+            face_center_z_m=0.0,
+            face_span_x_m=panel_span_x_m,
+            face_span_z_m=panel_span_z_m,
+            cell_span_x_m=solar_cell_span_x_m,
+            cell_span_z_m=solar_cell_span_z_m,
+            cell_thickness_m=solar_cell_thickness_m,
+            n_cols=solar_cell_cols,
+            n_rows=solar_cell_rows,
+            normal_sign=panel_face_sign,
+            material_name="cell_mat",
+        )
+        add_xz_face_cell_grid(
+            verts,
+            faces,
+            face_materials,
+            face_center_x_m=panel_open_x_m + body_size_y_m + panel_span_x_m,
+            face_surface_y_m=panel_face_sign * panel_open_y_m,
+            face_center_z_m=0.0,
+            face_span_x_m=panel_span_x_m,
+            face_span_z_m=panel_span_z_m,
+            cell_span_x_m=solar_cell_span_x_m,
+            cell_span_z_m=solar_cell_span_z_m,
+            cell_thickness_m=solar_cell_thickness_m,
+            n_cols=solar_cell_cols,
+            n_rows=solar_cell_rows,
+            normal_sign=panel_face_sign,
+            material_name="cell_mat",
+        )
+    else:
+        # Stowed panels leave only the bus-face tiles visible.
+        pass
+    bus_face_center_x_m = 0.0  # [m]
+    bus_face_center_y_m = 0.5 * body_size_y_m  # [m]
+    bus_face_center_z_m = 0.0  # [m]
+    bus_face_sign = 1.0  # [-]
+    add_xz_face_cell_grid(
+        verts,
+        faces,
+        face_materials,
+        face_center_x_m=bus_face_center_x_m,
+        face_surface_y_m=bus_face_center_y_m,
+        face_center_z_m=bus_face_center_z_m,
+        face_span_x_m=body_size_x_m,
+        face_span_z_m=body_size_z_m,
+        cell_span_x_m=solar_cell_span_x_m,
+        cell_span_z_m=solar_cell_span_z_m,
+        cell_thickness_m=solar_cell_thickness_m,
+        n_cols=solar_cell_cols,
+        n_rows=solar_cell_rows,
+        normal_sign=bus_face_sign,
+        material_name="cell_mat",
+    )
 
     write_obj(path, verts, faces, face_materials, panel_open=panels_open)
 

@@ -6,6 +6,7 @@ PYTHON_BIN="${BSK_ROOT}/.venv/bin/python"
 SIM_DIR="${BSK_ROOT}/simulation/"
 EXTERNAL_DIR="${SIM_DIR}/External"
 MODE="HYBRID"
+ENABLE_PLOTS="${ENABLE_PLOTS:-0}"
 
 usage() {
   cat <<'EOF'
@@ -15,6 +16,8 @@ Usage:
 
 Notes:
   - If no argument is provided, the default is 1 hour.
+  - Plot windows and saved plot outputs are disabled by default.
+    Set ENABLE_PLOTS=1 to turn them on.
   - Outputs are written under simulation/.
 EOF
 }
@@ -71,12 +74,22 @@ echo "[BUILD] Rebuilding Basilisk with external modules from: ${EXTERNAL_DIR}"
 
 echo "[RUN] Running HuskySat simulation for ${HOURS} hour(s) in mode ${MODE}"
 cd "${SIM_DIR}"
-PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
-  "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
-  --guidance-backend EXTERNAL_CPP \
-  --mode "${MODE}" \
-  --hours "${HOURS}" \
-  --bin-path "${SIM_BIN_PATH}"
+if [[ "${ENABLE_PLOTS}" == "1" ]]; then
+  PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
+    --guidance-backend EXTERNAL_CPP \
+    --mode "${MODE}" \
+    --hours "${HOURS}" \
+    --bin-path "${SIM_BIN_PATH}" \
+    --enable-plots
+else
+  PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
+    --guidance-backend EXTERNAL_CPP \
+    --mode "${MODE}" \
+    --hours "${HOURS}" \
+    --bin-path "${SIM_BIN_PATH}"
+fi
 
 if [[ "${RUN_KIND}" == "test" ]]; then
   echo "[DONE] Test run complete. Removed ${SIM_BIN_PATH} and ${PLOTS_DIR}."

@@ -40,7 +40,7 @@ def _parse_station_specs(station_specs):
     return stations
 
 
-def enable_vizard(sc_sim, sim_task_name, sc_object, save_path):
+def enable_vizard(sc_sim, sim_task_name, sc_object, save_path, generic_storage_list=None):
     """Create the Vizard interface and apply the baseline display settings."""
     # enableUnityVisualization wires Basilisk data logging + Unity-side visualization together.
     # saveFile is the .bin that Vizard reads/replays.
@@ -49,6 +49,7 @@ def enable_vizard(sc_sim, sim_task_name, sc_object, save_path):
         sim_task_name,
         sc_object,
         saveFile=save_path,
+        genericStorageList=generic_storage_list,
         oscOrbitColorList=[[80, 180, 255, 255]],
         trueOrbitColorList=[[255, 255, 255, 180]],
     )
@@ -66,7 +67,22 @@ def enable_vizard(sc_sim, sim_task_name, sc_object, save_path):
     viz.settings.spacecraftSizeMultiplier = 1.0
     viz.settings.viewCameraBoresightHUD = 1
     viz.settings.viewCameraConeHUD = 1
+    if generic_storage_list is not None:
+        vizSupport.setInstrumentGuiSetting(viz, showGenericStoragePanel=True)
     return viz
+
+
+def create_battery_storage_panel(battery_state_reader):
+    """Create a Vizard battery storage panel bound to a battery state message reader."""
+    battery_panel = vizSupport.vizInterface.GenericStorage()
+    battery_panel.label = "Battery Charge"
+    battery_panel.units = "W*s"
+    battery_panel.color = vizSupport.vizInterface.IntVector(
+        vizSupport.toRGBA255("red") + vizSupport.toRGBA255("green")
+    )
+    battery_panel.thresholds = vizSupport.vizInterface.IntVector([20])  # [%]
+    battery_panel.batteryStateInMsg = battery_state_reader
+    return battery_panel
 
 
 def add_vizard_scene_overlays(
@@ -220,7 +236,7 @@ def add_spacecraft_status_overlay(viz, spacecraft_tag):
         range=1.0,
         color="cyan",
         markerScale=1.2,
-        label="POWER: init | MODE: init | TMP: init | SOC: init",
+        label="STATE: init | EPS: init | TMP: init | SOC: init",
     )
     viz.settings.showLocationLabels = 1
     return station_name
@@ -236,11 +252,11 @@ def update_spacecraft_status_overlay(
     soc_pct,
 ):
     """Update the dynamic status marker text and color for the current power/thermal state."""
-    status_text = "CHARGING" if is_charging else "ACTIVE"
-    mode_text = str(guidance_state).replace("_", " ")
+    mode_text = "UNKNOWN" if guidance_state is None else str(guidance_state).replace("_", " ")
+    eps_text = "CHARGING" if is_charging else "DISCHARGING"
     label = (
-        f"POWER {status_text} | "
-        f"MODE {mode_text} | "
+        f"STATE {mode_text} | "
+        f"EPS {eps_text} | "
         f"PWR {net_power_w:+5.1f} W | "
         f"TMP {temp_c:5.1f} C | "
         f"SOC {soc_pct:5.1f}%"
