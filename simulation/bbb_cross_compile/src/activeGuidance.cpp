@@ -353,7 +353,7 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         }
 
         if (this->gnssFixEndNanos > CurrentSimNanos) {
-            // GNSS_FIX state: GNSS antenna (-Z) points to zenith to maximize sky view.
+            // GNSS_FIX state: antenna (-Z) points to zenith to maximize sky view.
             double minusZTargetHat[3] = {-earthHat_sc[0], -earthHat_sc[1], -earthHat_sc[2]};
             double gnssX_B[3] = {0.0, 0.0, 0.0};
             double gnssY_B[3] = {0.0, 0.0, 0.0};

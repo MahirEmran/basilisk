@@ -2,7 +2,7 @@ import numpy as np
 from Basilisk.utilities import macros, RigidBodyKinematics as rbk
 from Basilisk.architecture import sysModel, messaging
 
-from guidance_math import approx_sun_hat_from_epoch, compute_compromise_x, solve_roll_for_lost_clearance
+from guidance_math import approx_sun_hat_from_epoch, compute_compromise_x, solve_roll_for_lost_clearance, build_frame_for_plus_x_target
 
 
 class ActiveGuidance(sysModel.SysModel):
@@ -13,6 +13,7 @@ class ActiveGuidance(sysModel.SysModel):
         lost_excl_half_deg,
         status_period_sec,
         pos_found_b,
+        pos_comms_b,
         gnss_fix_period_sec,
         gnss_fix_duration_sec,
         gnss_zenith_half_angle_deg,
@@ -29,6 +30,7 @@ class ActiveGuidance(sysModel.SysModel):
         self.prev_roll_deg = None
         self.state = None
         self.pos_found_b = np.array(pos_found_b, dtype=float)
+        self.pos_comms_b = np.array(pos_comms_b, dtype=float)
 
         # Bootstrap value used until the SPICE message is available.
         self.default_sun_hat = approx_sun_hat_from_epoch(epoch_iso_utc)
@@ -112,7 +114,7 @@ class ActiveGuidance(sysModel.SysModel):
 
         return parsed
 
-    def _select_visible_ground_station(self, r_N, current_sim_nanos):
+    def _select_visible_ground_station(self, observer_pos_N, current_sim_nanos):
         if not self.ground_stations:
             return None, None
 
@@ -146,7 +148,7 @@ class ActiveGuidance(sysModel.SysModel):
             )
 
             station_zenith_hat = station_pos_N / np.linalg.norm(station_pos_N)
-            station_to_sc = r_N - station_pos_N
+            station_to_sc = observer_pos_N - station_pos_N
             station_to_sc_mag = np.linalg.norm(station_to_sc)
             if station_to_sc_mag < 1.0:
                 continue
@@ -156,7 +158,7 @@ class ActiveGuidance(sysModel.SysModel):
             if elevation_proxy <= 0.0:
                 continue
 
-            sc_to_station = station_pos_N - r_N
+            sc_to_station = station_pos_N - observer_pos_N
             sc_to_station_mag = np.linalg.norm(sc_to_station)
             if sc_to_station_mag < 1.0:
                 continue
@@ -200,6 +202,7 @@ class ActiveGuidance(sysModel.SysModel):
 
     @staticmethod
     def _antenna_zenith_angle_deg(z_B, earth_hat_sc):
+        """Calculate zenith angle for GNSS antenna on -Z face."""
         antenna_hat = -z_B
         zenith_hat = -earth_hat_sc
         cosine = float(np.clip(np.dot(antenna_hat, zenith_hat), -1.0, 1.0))
@@ -263,6 +266,7 @@ class ActiveGuidance(sysModel.SysModel):
 
         # FOUND is physically offset from COM, so use camera location (not COM) for constraints.
         found_pos_N = r_N.copy()
+        comms_pos_N = r_N.copy()
         if hasattr(scState, "sigma_BN"):
             try:
                 sigma_BN_now = np.array(scState.sigma_BN)
@@ -270,8 +274,10 @@ class ActiveGuidance(sysModel.SysModel):
                     c_bn = rbk.MRP2C(sigma_BN_now)
                     c_nb = c_bn.T
                     found_pos_N = r_N + c_nb.dot(self.pos_found_b)
+                    comms_pos_N = r_N + c_nb.dot(self.pos_comms_b)
             except Exception:
                 found_pos_N = r_N.copy()
+                comms_pos_N = r_N.copy()
 
         found_r_mag = np.linalg.norm(found_pos_N)
         # Using FOUND position (not COM) slightly changes Earth/Sun direction vectors,
@@ -366,7 +372,7 @@ class ActiveGuidance(sysModel.SysModel):
                 )
                 selected_state = "EXPERIMENT"
 
-                visible_label, visible_los_hat = self._select_visible_ground_station(r_N, CurrentSimNanos)
+                visible_label, visible_los_hat = self._select_visible_ground_station(comms_pos_N, CurrentSimNanos)
                 has_visible_station = visible_label is not None
 
                 if self.downlink_window_active:
@@ -386,7 +392,7 @@ class ActiveGuidance(sysModel.SysModel):
                     self.downlink_window_end_nanos = CurrentSimNanos + self.downlink_window_nanos
 
                 if self.downlink_window_active and has_visible_station and visible_label == self.downlink_window_station:
-                    dl_x, dl_y, dl_z = self._build_frame_for_minus_z_target(visible_los_hat, sun_hat_sc)
+                    dl_x, dl_y, dl_z = build_frame_for_plus_x_target(visible_los_hat, sun_hat_sc)
                     if dl_x is not None:
                         x_B, best_y, best_z = dl_x, dl_y, dl_z
                         best_roll_deg = 0.0

@@ -76,3 +76,5 @@ build/
 *.bin
 *_plots/
 models/
+bbb_packages/
+simulation/bbb_cross_compile/install

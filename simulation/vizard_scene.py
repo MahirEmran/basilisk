@@ -40,7 +40,15 @@ def _parse_station_specs(station_specs):
     return stations
 
 
-def enable_vizard(sc_sim, sim_task_name, sc_object, save_path, generic_storage_list=None):
+def enable_vizard(
+    sc_sim,
+    sim_task_name,
+    sc_object,
+    save_path,
+    generic_storage_list=None,
+    live_stream=False,
+    broadcast_stream=False,
+):
     """Create the Vizard interface and apply the baseline display settings."""
     # enableUnityVisualization wires Basilisk data logging + Unity-side visualization together.
     # saveFile is the .bin that Vizard reads/replays.
@@ -52,6 +60,8 @@ def enable_vizard(sc_sim, sim_task_name, sc_object, save_path, generic_storage_l
         genericStorageList=generic_storage_list,
         oscOrbitColorList=[[80, 180, 255, 255]],
         trueOrbitColorList=[[255, 255, 255, 180]],
+        liveStream=bool(live_stream),
+        broadcastStream=bool(broadcast_stream),
     )
     assert viz is not None, "Vizard setup failed"
 

@@ -35,21 +35,51 @@ def add_box_triangles(vertices, faces, center, size):
     faces.extend(box_faces)
 
 
-def add_cylinder_triangles(vertices, faces, center, radius, height, n_segs=16):
-    """Append a capped cylinder (axis along Z) to the vertex/face lists."""
+def add_cylinder_triangles(vertices, faces, center, radius, height, n_segs=16, axis="z"):
+    """Append a capped cylinder to the vertex/face lists."""
     cx, cy, cz = center
     base = len(vertices) + 1
-    bot_z = cz - 0.25 * height
-    top_z = cz + 0.5 * height
+    if axis not in ("x", "y", "z"):
+        raise ValueError(f"Unsupported cylinder axis '{axis}'")
 
-    # Build two rings: bottom then top.
-    for z_val in (bot_z, top_z):
+    axis_start = -0.5 * height  # [m]
+    axis_end = 0.5 * height  # [m]
+
+    # Build two rings: start cap then end cap.
+    for axis_offset in (axis_start, axis_end):
         for k in range(n_segs):
             ang = 2.0 * np.pi * k / n_segs
-            vertices.append([cx + radius * np.cos(ang), cy + radius * np.sin(ang), z_val])
+            if axis == "z":
+                vertices.append([
+                    cx + radius * np.cos(ang),
+                    cy + radius * np.sin(ang),
+                    cz + axis_offset,
+                ])
+            elif axis == "y":
+                vertices.append([
+                    cx + radius * np.cos(ang),
+                    cy + axis_offset,
+                    cz + radius * np.sin(ang),
+                ])
+            else:
+                vertices.append([
+                    cx + axis_offset,
+                    cy + radius * np.cos(ang),
+                    cz + radius * np.sin(ang),
+                ])
 
-    vertices.append([cx, cy, bot_z])
-    vertices.append([cx, cy, top_z])
+    if axis == "z":
+        cap_a = [cx, cy, cz + axis_start]
+        cap_b = [cx, cy, cz + axis_end]
+    elif axis == "y":
+        cap_a = [cx, cy + axis_start, cz]
+        cap_b = [cx, cy + axis_end, cz]
+    else:
+        cap_a = [cx + axis_start, cy, cz]
+        cap_b = [cx + axis_end, cy, cz]
+
+    vertices.append(cap_a)
+    vertices.append(cap_b)
     bot_cap = base + 2 * n_segs
     top_cap = base + 2 * n_segs + 1
 
@@ -181,7 +211,7 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("body_mat", start_faces)
 
-    # Simple antenna stalk on the -Z side.
+    # GNSS antenna stalk on the -Z side.
     ant_length = 0.08
     ant_radius = 0.005
     ant_cz = -0.5 * body_size_z_m - 0.5 * ant_length
@@ -192,6 +222,22 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
         center=[0.0, 0.0, ant_cz],
         radius=ant_radius,
         height=ant_length,
+        axis="z",
+    )
+    mark_component("antenna_mat", start_faces)
+
+    # Comms antenna stalk on the +X side (same pointing face as FOUND), shifted lower in Z.
+    comms_ant_cx = 0.5 * body_size_x_m  # [m]
+    comms_ant_cy = 0.0  # [m]
+    comms_ant_cz = 0.0  # [m]
+    start_faces = len(faces)
+    add_cylinder_triangles(
+        verts,
+        faces,
+        center=[comms_ant_cx - 0.05, comms_ant_cy+ ant_length, comms_ant_cz ],
+        radius=ant_radius,
+        height=ant_length,
+        axis="y",
     )
     mark_component("antenna_mat", start_faces)
 
@@ -225,41 +271,42 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     mark_component("panel_mat", start_faces)
 
     if panels_open:
+        print("hi")
         # The deployed panel spans carry 12 of the 18 visible cells.
-        add_xz_face_cell_grid(
-            verts,
-            faces,
-            face_materials,
-            face_center_x_m=panel_open_x_m,
-            face_surface_y_m=panel_face_sign * panel_open_y_m,
-            face_center_z_m=0.0,
-            face_span_x_m=panel_span_x_m,
-            face_span_z_m=panel_span_z_m,
-            cell_span_x_m=solar_cell_span_x_m,
-            cell_span_z_m=solar_cell_span_z_m,
-            cell_thickness_m=solar_cell_thickness_m,
-            n_cols=solar_cell_cols,
-            n_rows=solar_cell_rows,
-            normal_sign=panel_face_sign,
-            material_name="cell_mat",
-        )
-        add_xz_face_cell_grid(
-            verts,
-            faces,
-            face_materials,
-            face_center_x_m=panel_open_x_m + body_size_y_m + panel_span_x_m,
-            face_surface_y_m=panel_face_sign * panel_open_y_m,
-            face_center_z_m=0.0,
-            face_span_x_m=panel_span_x_m,
-            face_span_z_m=panel_span_z_m,
-            cell_span_x_m=solar_cell_span_x_m,
-            cell_span_z_m=solar_cell_span_z_m,
-            cell_thickness_m=solar_cell_thickness_m,
-            n_cols=solar_cell_cols,
-            n_rows=solar_cell_rows,
-            normal_sign=panel_face_sign,
-            material_name="cell_mat",
-        )
+        # add_xz_face_cell_grid(
+        #     verts,
+        #     faces,
+        #     face_materials,
+        #     face_center_x_m=panel_open_x_m,
+        #     face_surface_y_m=panel_face_sign * panel_open_y_m,
+        #     face_center_z_m=0.0,
+        #     face_span_x_m=panel_span_x_m,
+        #     face_span_z_m=panel_span_z_m,
+        #     cell_span_x_m=solar_cell_span_x_m,
+        #     cell_span_z_m=solar_cell_span_z_m,
+        #     cell_thickness_m=solar_cell_thickness_m,
+        #     n_cols=solar_cell_cols,
+        #     n_rows=solar_cell_rows,
+        #     normal_sign=panel_face_sign,
+        #     material_name="cell_mat",
+        # )
+        # add_xz_face_cell_grid(
+        #     verts,
+        #     faces,
+        #     face_materials,
+        #     face_center_x_m=panel_open_x_m + body_size_y_m + panel_span_x_m,
+        #     face_surface_y_m=panel_face_sign * panel_open_y_m,
+        #     face_center_z_m=0.0,
+        #     face_span_x_m=panel_span_x_m,
+        #     face_span_z_m=panel_span_z_m,
+        #     cell_span_x_m=solar_cell_span_x_m,
+        #     cell_span_z_m=solar_cell_span_z_m,
+        #     cell_thickness_m=solar_cell_thickness_m,
+        #     n_cols=solar_cell_cols,
+        #     n_rows=solar_cell_rows,
+        #     normal_sign=panel_face_sign,
+        #     material_name="cell_mat",
+        # )
     else:
         # Stowed panels leave only the bus-face tiles visible.
         pass
@@ -267,23 +314,23 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     bus_face_center_y_m = 0.5 * body_size_y_m  # [m]
     bus_face_center_z_m = 0.0  # [m]
     bus_face_sign = 1.0  # [-]
-    add_xz_face_cell_grid(
-        verts,
-        faces,
-        face_materials,
-        face_center_x_m=bus_face_center_x_m,
-        face_surface_y_m=bus_face_center_y_m,
-        face_center_z_m=bus_face_center_z_m,
-        face_span_x_m=body_size_x_m,
-        face_span_z_m=body_size_z_m,
-        cell_span_x_m=solar_cell_span_x_m,
-        cell_span_z_m=solar_cell_span_z_m,
-        cell_thickness_m=solar_cell_thickness_m,
-        n_cols=solar_cell_cols,
-        n_rows=solar_cell_rows,
-        normal_sign=bus_face_sign,
-        material_name="cell_mat",
-    )
+    # add_xz_face_cell_grid(
+    #     verts,
+    #     faces,
+    #     face_materials,
+    #     face_center_x_m=bus_face_center_x_m,
+    #     face_surface_y_m=bus_face_center_y_m,
+    #     face_center_z_m=bus_face_center_z_m,
+    #     face_span_x_m=body_size_x_m,
+    #     face_span_z_m=body_size_z_m,
+    #     cell_span_x_m=solar_cell_span_x_m,
+    #     cell_span_z_m=solar_cell_span_z_m,
+    #     cell_thickness_m=solar_cell_thickness_m,
+    #     n_cols=solar_cell_cols,
+    #     n_rows=solar_cell_rows,
+    #     normal_sign=bus_face_sign,
+    #     material_name="cell_mat",
+    # )
 
     write_obj(path, verts, faces, face_materials, panel_open=panels_open)
 

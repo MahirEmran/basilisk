@@ -120,3 +120,33 @@ def solve_roll_for_lost_clearance(x_b, earth_hat, sun_hat, prev_roll_deg=None, e
         )
 
     return best_roll_deg, best_y, best_z, max_score
+
+
+def build_frame_for_plus_x_target(plus_x_target_hat, z_hint_hat):
+    """Build a frame where +X points to target (used for Earth/ground-pointing downlink)."""
+    plus_x_mag = np.linalg.norm(plus_x_target_hat)
+    if plus_x_mag < 1.0e-12:
+        return None, None, None
+
+    plus_x_hat = plus_x_target_hat / plus_x_mag
+    x_B = plus_x_hat
+
+    z_proj = z_hint_hat - np.dot(z_hint_hat, x_B) * x_B
+    z_proj_mag = np.linalg.norm(z_proj)
+    if z_proj_mag < 1.0e-12:
+        fallback = np.array([0.0, 0.0, 1.0])
+        if abs(x_B[2]) >= 0.9:
+            fallback = np.array([0.0, 1.0, 0.0])
+        z_proj = fallback - np.dot(fallback, x_B) * x_B
+        z_proj_mag = np.linalg.norm(z_proj)
+        if z_proj_mag < 1.0e-12:
+            return None, None, None
+
+    z_B = z_proj / z_proj_mag
+    y_B = np.cross(z_B, x_B)
+    y_mag = np.linalg.norm(y_B)
+    if y_mag < 1.0e-12:
+        return None, None, None
+    y_B = y_B / y_mag
+
+    return x_B, y_B, z_B

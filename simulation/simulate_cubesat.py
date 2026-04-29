@@ -16,6 +16,7 @@ from Basilisk.simulation import (
     simpleBattery,
     simplePowerSink,
     sensorThermal,
+    simSynch,
 )
 from Basilisk.fswAlgorithms import attTrackingError, mrpPD
 from Basilisk.architecture import messaging
@@ -31,6 +32,13 @@ from vizard_scene import (
     update_spacecraft_status_overlay,
     create_battery_storage_panel,
 )
+
+# HIL imports
+try:
+    from hil.hil_orchestrator import HilOrchestrator, create_hil_orchestrator
+    HIL_AVAILABLE = True
+except ImportError:
+    HIL_AVAILABLE = False
 
 
 DEFAULT_ADCS_MODE = "HYBRID"
@@ -48,6 +56,7 @@ DEFAULT_GNSS_FIX_DURATION_SEC = 60.0
 DEFAULT_GNSS_ZENITH_HALF_ANGLE_DEG = 45.0
 DEFAULT_GNSS_DEAD_RECKONING_SEC = 900.0
 DEFAULT_DOWNLINK_WINDOW_SEC = 420.0
+DEFAULT_RT_FACTOR = 1.0  # [-]
 DEFAULT_GROUND_STATIONS = [
     "SEATTLE:47.6062:-122.3321",
     "DARMSTADT:49.8728:8.6512",
@@ -448,6 +457,85 @@ def parse_cli_args():
         action="store_true",
         help="Enable live telemetry plotting and end-of-run uptime plots.",
     )
+    parser.add_argument(
+        "--realtime",
+        action="store_true",
+        help="Enable real-time simulation pacing (ClockSynch).",
+    )
+    parser.add_argument(
+        "--rt-factor",
+        type=float,
+        default=DEFAULT_RT_FACTOR,
+        help="Real-time acceleration factor (1.0 = real time).",
+    )
+    parser.add_argument(
+        "--live-stream",
+        action="store_true",
+        help="Enable live streaming to Vizard while the sim runs.",
+    )
+    parser.add_argument(
+        "--broadcast-stream",
+        action="store_true",
+        help="Broadcast live Vizard stream for remote subscribers.",
+    )
+    # HIL arguments
+    parser.add_argument(
+        "--hil-enable",
+        action="store_true",
+        help="Enable HIL mode for BeagleBone Black integration.",
+    )
+    parser.add_argument(
+        "--hil-role",
+        choices=["truth", "proxy"],
+        default="truth",
+        help="HIL role: truth (Basilisk) or proxy (BBB gateway).",
+    )
+    parser.add_argument(
+        "--hil-transport",
+        choices=["udp", "zmq", "uart"],
+        default="zmq",
+        help="HIL transport protocol.",
+    )
+    parser.add_argument(
+        "--hil-bind-ip",
+        default="0.0.0.0",
+        help="HIL bind IP address for truth role.",
+    )
+    parser.add_argument(
+        "--hil-bind-port",
+        type=int,
+        default=5555,
+        help="HIL bind port for truth role.",
+    )
+    parser.add_argument(
+        "--hil-peer-ip",
+        default="127.0.0.1",
+        help="HIL peer IP address (BBB for truth role, Basilisk for proxy role).",
+    )
+    parser.add_argument(
+        "--hil-peer-port",
+        type=int,
+        default=5556,
+        help="HIL peer port.",
+    )
+    parser.add_argument(
+        "--hil-cycle-ms",
+        type=int,
+        default=10,
+        help="HIL cycle time in milliseconds (default: 10ms = 100Hz).",
+    )
+    parser.add_argument(
+        "--hil-timeout-ms",
+        type=int,
+        default=5000,
+        help="HIL command timeout in milliseconds.",
+    )
+    parser.add_argument(
+        "--hil-hold-last-max-ms",
+        type=int,
+        default=10000,
+        help="HIL maximum hold-last duration in milliseconds.",
+    )
     args = parser.parse_args()
     if args.hours <= 0.0:
         parser.error("--hours must be greater than 0")
@@ -469,6 +557,12 @@ def parse_cli_args():
         parser.error("--gnss-dead-reckoning must be greater than 0")
     if args.downlink_window <= 0.0:
         parser.error("--downlink-window must be greater than 0")
+    if args.rt_factor <= 0.0:
+        parser.error("--rt-factor must be greater than 0")
+    if args.hil_transport == "zmq":
+        if args.hil_bind_port == 5555 and args.hil_peer_port == 5556:
+            args.hil_bind_port = 5566
+            args.hil_peer_port = 5555
     if args.ground_station is None:
         args.ground_station = list(DEFAULT_GROUND_STATIONS)
     return args
@@ -476,6 +570,9 @@ def parse_cli_args():
 
 CLI_ARGS = parse_cli_args()
 PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
+REALTIME_ENABLED = bool(CLI_ARGS.realtime) or bool(CLI_ARGS.hil_enable)
+LIVE_STREAM_ENABLED = bool(CLI_ARGS.live_stream) or bool(CLI_ARGS.hil_enable)
+BROADCAST_STREAM_ENABLED = bool(CLI_ARGS.broadcast_stream)
 
 
 def _create_guidance_module(
@@ -485,6 +582,7 @@ def _create_guidance_module(
     lost_excl_half_deg,
     status_period_sec,
     pos_found_b,
+    pos_comms_b,
     gnss_fix_period_sec,
     gnss_fix_duration_sec,
     gnss_zenith_half_angle_deg,
@@ -513,6 +611,7 @@ def _create_guidance_module(
         module.setDownlinkWindowSec(float(downlink_window_sec))
         module.setGroundStationsCsv(";".join(ground_stations))
         module.setPosFound_B(float(pos_found_b[0]), float(pos_found_b[1]), float(pos_found_b[2]))
+        module.setPosComms_B(float(pos_comms_b[0]), float(pos_comms_b[1]), float(pos_comms_b[2]))
         sun_hat = approx_sun_hat_from_epoch(epoch_iso_utc)
         module.setDefaultSunHat_N(float(sun_hat[0]), float(sun_hat[1]), float(sun_hat[2]))
         return module
@@ -523,6 +622,7 @@ def _create_guidance_module(
         lost_excl_half_deg=lost_excl_half_deg,
         status_period_sec=status_period_sec,
         pos_found_b=pos_found_b,
+        pos_comms_b=pos_comms_b,
         gnss_fix_period_sec=gnss_fix_period_sec,
         gnss_fix_duration_sec=gnss_fix_duration_sec,
         gnss_zenith_half_angle_deg=gnss_zenith_half_angle_deg,
@@ -631,7 +731,8 @@ SIM_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
 # body frame layout:
 #   +X = long rectangular side  → FOUND camera face
 #   +Z = square endcap face     → LOST camera face
-#   -Z = opposite square endcap → antenna
+#   -Z = opposite square endcap → GNSS antenna
+#   +X = same long side as FOUND→ Comms antenna (below FOUND)
 # NOTE: keep CLI flag names for compatibility, but map dimensions to match the face layout above.
 BODY_LONG_M = CLI_ARGS.body_x
 BODY_SIDE_M = CLI_ARGS.body_yz
@@ -646,12 +747,14 @@ FOUND_Z_OFFSET_FRAC = 0.35
 # sensor boresight vectors in body frame
 VEC_LOST_B  = [0, 0,  1]   # LOST points out +Z (square face)
 VEC_FOUND_B = [1, 0,  0]   # FOUND points out +X (long face)
-VEC_ANT_B   = [0, 0, -1]   # antenna points out -Z (opposite square face)
+VEC_ANT_B   = [0, 0, -1]   # GNSS antenna points out -Z (opposite square face)
+VEC_COMMS_B = [1, 0, 0]  # Comms antenna points out +X (same face as FOUND)
 
 # sensor positions at center of each face
 POS_LOST_B  = [0.0, 0.0,  0.5 * BODY_SIZE_Z_M]
 POS_FOUND_B = [0.5 * BODY_SIZE_X_M, 0.0, FOUND_Z_OFFSET_FRAC * BODY_SIZE_Z_M]
 POS_ANT_B   = [0.0, 0.0, -0.5 * BODY_SIZE_Z_M]
+POS_COMMS_B = [0.5 * BODY_SIZE_X_M, 0.0, 0.0]  # [m] same +X face as FOUND, lowered toward bus mid-height
 
 # camera FOVs (full angle) and derived half-angles
 LOST_FOV_DEG  = CLI_ARGS.lost_fov
@@ -714,6 +817,12 @@ dynProcess  = scSim.CreateNewProcess("dynamicsProcess")
 # 0.5 s timestep: ω_n*dt = 0.707*0.5 = 0.35 << π  (stable)
 dynProcess.addTask(scSim.CreateNewTask(simTaskName, macros.sec2nano(0.5)))
 
+if REALTIME_ENABLED:
+    clock_sync = simSynch.ClockSynch()
+    clock_sync.accelFactor = float(CLI_ARGS.rt_factor)
+    scSim.AddModelToTask(simTaskName, clock_sync)
+    print(f"[REALTIME] ClockSynch enabled at {clock_sync.accelFactor:.2f}x")
+
 scObject          = spacecraft.Spacecraft()
 scObject.ModelTag = "cubesat"
 scObject.hub.mHub = 12.0
@@ -752,6 +861,7 @@ guidance = _create_guidance_module(
     lost_excl_half_deg=LOST_EXCL_HALF_DEG,
     status_period_sec=CLI_ARGS.status_period,
     pos_found_b=POS_FOUND_B,
+    pos_comms_b=POS_COMMS_B,
     gnss_fix_period_sec=CLI_ARGS.gnss_fix_period,
     gnss_fix_duration_sec=CLI_ARGS.gnss_fix_duration,
     gnss_zenith_half_angle_deg=CLI_ARGS.gnss_zenith_half_angle,
@@ -875,7 +985,15 @@ if os.path.exists(save_path):
     os.remove(save_path)  # clear old run so Vizard doesn't load stale data
 
 # Vizard bootstrap is handled in one helper so this file can stay focused on sim logic.
-viz = enable_vizard(scSim, simTaskName, scObject, save_path, generic_storage_list=viz_storage_list)
+viz = enable_vizard(
+    scSim,
+    simTaskName,
+    scObject,
+    save_path,
+    generic_storage_list=viz_storage_list,
+    live_stream=LIVE_STREAM_ENABLED,
+    broadcast_stream=BROADCAST_STREAM_ENABLED,
+)
 live_telemetry_plot = LiveTelemetryPlot(enabled=PLOTS_ENABLED, compression_power=0.5)  # [-]
 
 # Pre-build both visual variants once (OPEN/CLOSED) and hot-swap them during runtime.
@@ -938,6 +1056,40 @@ print("Ground stations:")
 for station_spec in CLI_ARGS.ground_station:
     print(f"  - {station_spec}")
 scSim.InitializeSimulation()
+
+# HIL initialization
+hil_orchestrator = None
+if CLI_ARGS.hil_enable:
+    if not HIL_AVAILABLE:
+        print("[HIL] ERROR: HIL modules not available. Install simulation/hil package.")
+        sys.exit(1)
+
+    print("[HIL] Initializing HIL orchestrator...")
+    hil_config = {
+        'hil_enable': True,
+        'hil_role': CLI_ARGS.hil_role,
+        'hil_transport': CLI_ARGS.hil_transport,
+        'hil_bind_ip': CLI_ARGS.hil_bind_ip,
+        'hil_bind_port': CLI_ARGS.hil_bind_port,
+        'hil_peer_ip': CLI_ARGS.hil_peer_ip,
+        'hil_peer_port': CLI_ARGS.hil_peer_port,
+        'hil_cycle_ms': CLI_ARGS.hil_cycle_ms,
+        'hil_timeout_ms': CLI_ARGS.hil_timeout_ms,
+        'hil_hold_last_max_ms': CLI_ARGS.hil_hold_last_max_ms,
+    }
+
+    hil_orchestrator = create_hil_orchestrator(hil_config)
+
+    if not hil_orchestrator.initialize():
+        print("[HIL] ERROR: Failed to initialize HIL orchestrator")
+        sys.exit(1)
+
+    if not hil_orchestrator.start():
+        print("[HIL] ERROR: Failed to start HIL orchestrator")
+        sys.exit(1)
+
+    print("[HIL] HIL orchestrator started successfully")
+
 stop_time_nanos = macros.hour2nano(SIM_HOURS)
 visual_update_step_nanos = macros.sec2nano(1.0)
 next_stop_nanos = 0
@@ -1015,6 +1167,40 @@ while next_stop_nanos < stop_time_nanos:
 
     scSim.ConfigureStopTime(next_stop_nanos)
     scSim.ExecuteSimulation()
+
+    # HIL integration: send truth data and receive commands
+    if CLI_ARGS.hil_enable and hil_orchestrator:
+        try:
+            sc_state_now = scObject.scStateOutMsg.read()
+
+            # Send truth navigation data to BBB
+            position = sc_state_now.r_BN_N
+            velocity = sc_state_now.v_BN_N
+            attitude_mrp = sc_state_now.sigma_BN
+            rate = sc_state_now.omega_BN_B
+
+            # Convert MRP to quaternion for HIL
+            # MRP to quaternion conversion: q = [q0, q1, q2, q3]
+            # where q0 = (1 - sigma^2) / (1 + sigma^2)
+            # and q1:3 = 2 * sigma / (1 + sigma^2)
+            sigma_squared = np.sum(np.array(attitude_mrp) ** 2)
+            denominator = 1.0 + sigma_squared
+            q0 = (1.0 - sigma_squared) / denominator
+            q123 = 2.0 * np.array(attitude_mrp) / denominator
+            attitude_quat = np.array([q0, q123[0], q123[1], q123[2]])
+
+            hil_orchestrator.send_truth_nav(
+                position, velocity, attitude_quat, rate
+            )
+
+            # Get command from BBB (if available)
+            command = hil_orchestrator.get_command()
+            if command:
+                # Apply command to simulation (placeholder for actual command application)
+                pass
+
+        except Exception as e:
+            print(f"[HIL] Warning: HIL integration error: {e}")
 
     dt_nanos = next_stop_nanos - previous_stop_nanos
     if dt_nanos > 0:
@@ -1312,5 +1498,22 @@ if PLOTS_ENABLED:
 
     csv_path = _write_uptime_points_csv(save_path, uptime_history)
     print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+
+# HIL cleanup
+if CLI_ARGS.hil_enable and hil_orchestrator:
+    print("[HIL] Stopping HIL orchestrator...")
+    hil_orchestrator.stop()
+
+    # Print HIL statistics
+    stats = hil_orchestrator.get_statistics()
+    print("[HIL] HIL Statistics:")
+    print(f"[HIL]   Sequence TX: {stats.get('seq_tx', 0)}")
+    print(f"[HIL]   Sequence RX: {stats.get('seq_rx', 0)}")
+    print(f"[HIL]   Dropped frames: {stats.get('dropped_frames', 0)}")
+    print(f"[HIL]   Stale frames: {stats.get('stale_frames', 0)}")
+    print(f"[HIL]   Avg loop jitter: {stats.get('avg_loop_jitter_ms', 0):.2f} ms")
+    print(f"[HIL]   Avg loop latency: {stats.get('avg_loop_latency_ms', 0):.2f} ms")
+    print(f"[HIL]   Avg command age: {stats.get('avg_command_age_ms', 0):.2f} ms")
+    print(f"[HIL]   Watchdog trips: {stats.get('watchdog_trips', 0)}")
 
 print(f"Done! Load {save_path} in Vizard.")

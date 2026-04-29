@@ -236,7 +236,7 @@ bool buildFrameForMinusZTarget(const double minusZTargetHat[3],
         return false;
     }
 
-    // GNSS antenna boresight is -Z, so body +Z points opposite the target direction.
+    // Antenna boresight is -Z, so body +Z points opposite the target direction.
     outZ_B[0] = -minusZHat[0];
     outZ_B[1] = -minusZHat[1];
     outZ_B[2] = -minusZHat[2];
