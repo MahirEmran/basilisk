@@ -6,7 +6,7 @@ PYTHON_BIN="${BSK_ROOT}/.venv/bin/python"
 SIM_DIR="${BSK_ROOT}/simulation/"
 EXTERNAL_DIR="${SIM_DIR}/External"
 MODE="HYBRID"
-ENABLE_PLOTS=0
+ENABLE_PLOTS=1
 REBUILD=0
 
 usage() {
