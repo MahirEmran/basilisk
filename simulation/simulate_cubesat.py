@@ -45,8 +45,8 @@ DEFAULT_ADCS_MODE = "HYBRID"
 DEFAULT_SIM_HOURS = 24.0
 DEFAULT_BODY_X_M = 0.30
 DEFAULT_BODY_YZ_M = 0.10
-DEFAULT_LOST_FOV_DEG = 15.0
-DEFAULT_FOUND_FOV_DEG = 60.0
+DEFAULT_LOST_FOV_DEG = 25.5
+DEFAULT_FOUND_FOV_DEG = 75.6
 DEFAULT_EXCLUSION_BUFFER_DEG = 10.0
 DEFAULT_STATUS_PERIOD_SEC = 60.0
 DEFAULT_BIN_PATH = "./output.bin"
@@ -127,7 +127,7 @@ def _fit_exponential_convergence(time_hours, uptime_pct):
 
 
 def _generate_uptime_plots(save_path, history):
-    """Write six uptime convergence plots (FOUND/LOST x overall/CHARGING/EXPERIMENT)."""
+    """Write uptime convergence plots for overall, CHARGING, EXPERIMENT, GNSS_FIX, and DOWNLINK."""
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -155,6 +155,10 @@ def _generate_uptime_plots(save_path, history):
         ("found_charging_pct", "FOUND CHARGING Uptime", "found_charging_uptime.png"),
         ("lost_experiment_pct", "LOST EXPERIMENT Uptime", "lost_experiment_uptime.png"),
         ("found_experiment_pct", "FOUND EXPERIMENT Uptime", "found_experiment_uptime.png"),
+        ("lost_gnss_pct", "LOST GNSS_FIX Uptime", "lost_gnss_uptime.png"),
+        ("found_gnss_pct", "FOUND GNSS_FIX Uptime", "found_gnss_uptime.png"),
+        ("lost_downlink_pct", "LOST DOWNLINK Uptime", "lost_downlink_uptime.png"),
+        ("found_downlink_pct", "FOUND DOWNLINK Uptime", "found_downlink_uptime.png"),
     ]
 
     written_paths = []
@@ -235,6 +239,10 @@ def _write_uptime_points_csv(save_path, history):
         "found_charging_pct",
         "lost_experiment_pct",
         "found_experiment_pct",
+        "lost_gnss_pct",
+        "found_gnss_pct",
+        "lost_downlink_pct",
+        "found_downlink_pct",
     ]
 
     def _fmt(value):
@@ -258,6 +266,150 @@ def _write_uptime_points_csv(save_path, history):
             writer.writerow(row)
 
     return csv_path
+
+
+def _write_uptime_summary_txt(save_path,
+                              lost_uptime_pct, found_uptime_pct,
+                              lost_uptime_charging_pct, found_uptime_charging_pct,
+                              lost_uptime_experiment_pct, found_uptime_experiment_pct,
+                              lost_experiment_fail_nanos_by_body, lost_charging_fail_nanos_by_body,
+                              found_charging_fail_nanos_by_reason, found_experiment_fail_nanos_by_reason,
+                              lost_gnss_fail_nanos_by_body, lost_downlink_fail_nanos_by_body,
+                              found_gnss_fail_nanos_by_reason, found_downlink_fail_nanos_by_reason,
+                              sampled_time_nanos, sampled_time_charging_nanos, sampled_time_experiment_nanos,
+                              sampled_time_by_state_nanos, lost_uptime_by_state_nanos, found_uptime_by_state_nanos,
+                              state_names):
+    """Write final uptime summary statistics to a text file."""
+    bin_path = os.path.abspath(save_path)
+    bin_dir = os.path.dirname(bin_path)
+    bin_stem = os.path.splitext(os.path.basename(bin_path))[0]
+    plot_dir = os.path.join(bin_dir, f"{bin_stem}_plots")
+    os.makedirs(plot_dir, exist_ok=True)
+
+    txt_path = os.path.join(plot_dir, "uptime_summary.txt")
+
+    with open(txt_path, "w", encoding="utf-8") as txt_file:
+        txt_file.write("UPTIME SUMMARY REPORT\n")
+        txt_file.write("=" * 60 + "\n\n")
+
+        txt_file.write("OVERALL UPTIME:\n")
+        txt_file.write(f"  LOST clear uptime (total):    {lost_uptime_pct:6.2f}%\n")
+        txt_file.write(f"  FOUND valid uptime (total):   {found_uptime_pct:6.2f}%\n\n")
+
+        txt_file.write("CHARGING STATE UPTIME:\n")
+        if lost_uptime_charging_pct is None:
+            txt_file.write("  LOST clear uptime: N/A (state not visited)\n")
+        else:
+            txt_file.write(f"  LOST clear uptime: {lost_uptime_charging_pct:6.2f}%\n")
+        if found_uptime_charging_pct is None:
+            txt_file.write("  FOUND valid uptime: N/A (state not visited)\n")
+        else:
+            txt_file.write(f"  FOUND valid uptime: {found_uptime_charging_pct:6.2f}%\n")
+        txt_file.write("\n")
+
+        txt_file.write("EXPERIMENT STATE UPTIME:\n")
+        if lost_uptime_experiment_pct is None:
+            txt_file.write("  LOST clear uptime: N/A (state not visited)\n")
+        else:
+            txt_file.write(f"  LOST clear uptime: {lost_uptime_experiment_pct:6.2f}%\n")
+        if found_uptime_experiment_pct is None:
+            txt_file.write("  FOUND valid uptime: N/A (state not visited)\n")
+        else:
+            txt_file.write(f"  FOUND valid uptime: {found_uptime_experiment_pct:6.2f}%\n")
+        txt_file.write("\n")
+
+        if sampled_time_experiment_nanos > 0:
+            txt_file.write("LOST EXPERIMENT FAIL-TIME BREAKDOWN (inner red keep-out):\n")
+            for body_name in ("earth", "sun", "moon"):
+                fail_pct = 100.0 * lost_experiment_fail_nanos_by_body[body_name] / sampled_time_experiment_nanos
+                txt_file.write(f"  {body_name.upper():>5}: {fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when multiple bodies violate at once.\n\n")
+
+        if sampled_time_charging_nanos > 0:
+            txt_file.write("LOST CHARGING FAIL-TIME BREAKDOWN (inner red keep-out):\n")
+            for body_name in ("earth", "sun", "moon"):
+                fail_pct = 100.0 * lost_charging_fail_nanos_by_body[body_name] / sampled_time_charging_nanos
+                txt_file.write(f"  {body_name.upper():>5}: {fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when multiple bodies violate at once.\n\n")
+
+        if sampled_time_charging_nanos > 0:
+            txt_file.write("FOUND CHARGING FAIL-TIME BREAKDOWN:\n")
+            charge_earth_fail_pct = (
+                100.0 * found_charging_fail_nanos_by_reason["earth_not_visible"] / sampled_time_charging_nanos
+            )
+            charge_sun_fail_pct = (
+                100.0 * found_charging_fail_nanos_by_reason["sun_keepout_violation"] / sampled_time_charging_nanos
+            )
+            txt_file.write(f"  EARTH_NOT_VISIBLE:    {charge_earth_fail_pct:6.2f}%\n")
+            txt_file.write(f"  SUN_KEEPOUT_VIOLATION:{charge_sun_fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when both FOUND conditions fail at once.\n\n")
+
+        if sampled_time_experiment_nanos > 0:
+            txt_file.write("FOUND EXPERIMENT FAIL-TIME BREAKDOWN:\n")
+            exp_earth_fail_pct = (
+                100.0 * found_experiment_fail_nanos_by_reason["earth_not_visible"] / sampled_time_experiment_nanos
+            )
+            exp_sun_fail_pct = (
+                100.0 * found_experiment_fail_nanos_by_reason["sun_keepout_violation"] / sampled_time_experiment_nanos
+            )
+            txt_file.write(f"  EARTH_NOT_VISIBLE:    {exp_earth_fail_pct:6.2f}%\n")
+            txt_file.write(f"  SUN_KEEPOUT_VIOLATION:{exp_sun_fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when both FOUND conditions fail at once.\n\n")
+
+        gnss_time_nanos = sampled_time_by_state_nanos.get("GNSS_FIX", 0)  # [ns]
+        if gnss_time_nanos > 0:
+            txt_file.write("LOST GNSS_FIX FAIL-TIME BREAKDOWN (inner red keep-out):\n")
+            for body_name in ("earth", "sun", "moon"):
+                fail_pct = 100.0 * lost_gnss_fail_nanos_by_body[body_name] / gnss_time_nanos  # [%]
+                txt_file.write(f"  {body_name.upper():>5}: {fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when multiple bodies violate at once.\n\n")
+
+            txt_file.write("FOUND GNSS_FIX FAIL-TIME BREAKDOWN:\n")
+            gnss_earth_fail_pct = (
+                100.0 * found_gnss_fail_nanos_by_reason["earth_not_visible"] / gnss_time_nanos
+            )  # [%]
+            gnss_sun_fail_pct = (
+                100.0 * found_gnss_fail_nanos_by_reason["sun_keepout_violation"] / gnss_time_nanos
+            )  # [%]
+            txt_file.write(f"  EARTH_NOT_VISIBLE:    {gnss_earth_fail_pct:6.2f}%\n")
+            txt_file.write(f"  SUN_KEEPOUT_VIOLATION:{gnss_sun_fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when both FOUND conditions fail at once.\n\n")
+
+        downlink_time_nanos = sampled_time_by_state_nanos.get("DOWNLINK", 0)  # [ns]
+        if downlink_time_nanos > 0:
+            txt_file.write("LOST DOWNLINK FAIL-TIME BREAKDOWN (inner red keep-out):\n")
+            for body_name in ("earth", "sun", "moon"):
+                fail_pct = 100.0 * lost_downlink_fail_nanos_by_body[body_name] / downlink_time_nanos  # [%]
+                txt_file.write(f"  {body_name.upper():>5}: {fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when multiple bodies violate at once.\n\n")
+
+            txt_file.write("FOUND DOWNLINK FAIL-TIME BREAKDOWN:\n")
+            downlink_earth_fail_pct = (
+                100.0 * found_downlink_fail_nanos_by_reason["earth_not_visible"] / downlink_time_nanos
+            )  # [%]
+            downlink_sun_fail_pct = (
+                100.0 * found_downlink_fail_nanos_by_reason["sun_keepout_violation"] / downlink_time_nanos
+            )  # [%]
+            txt_file.write(f"  EARTH_NOT_VISIBLE:    {downlink_earth_fail_pct:6.2f}%\n")
+            txt_file.write(f"  SUN_KEEPOUT_VIOLATION:{downlink_sun_fail_pct:6.2f}%\n")
+            txt_file.write("  Note: percentages can overlap when both FOUND conditions fail at once.\n\n")
+
+        txt_file.write("STATE-BY-STATE AVAILABILITY SUMMARY:\n")
+        for state_name in state_names:
+            state_time_nanos = sampled_time_by_state_nanos[state_name]
+            if state_time_nanos <= 0:
+                txt_file.write(f"  {state_name:>9}: not visited\n")
+                continue
+
+            state_time_pct = 100.0 * state_time_nanos / sampled_time_nanos
+            state_lost_pct = 100.0 * lost_uptime_by_state_nanos[state_name] / state_time_nanos
+            state_found_pct = 100.0 * found_uptime_by_state_nanos[state_name] / state_time_nanos
+            txt_file.write(
+                f"  {state_name:>9}: time={state_time_pct:6.2f}% "
+                f"LOST={state_lost_pct:6.2f}% FOUND={state_found_pct:6.2f}%\n"
+            )
+
+    return txt_path
 
 
 class LiveTelemetryPlot:
@@ -455,7 +607,7 @@ def parse_cli_args():
     parser.add_argument(
         "--enable-plots",
         action="store_true",
-        help="Enable live telemetry plotting and end-of-run uptime plots.",
+        help="Enable live telemetry plotting; end-of-run uptime plots are generated automatically.",
     )
     parser.add_argument(
         "--realtime",
@@ -569,7 +721,7 @@ def parse_cli_args():
 
 
 CLI_ARGS = parse_cli_args()
-PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
+LIVE_PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
 REALTIME_ENABLED = bool(CLI_ARGS.realtime) or bool(CLI_ARGS.hil_enable)
 LIVE_STREAM_ENABLED = bool(CLI_ARGS.live_stream) or bool(CLI_ARGS.hil_enable)
 BROADCAST_STREAM_ENABLED = bool(CLI_ARGS.broadcast_stream)
@@ -731,7 +883,7 @@ SIM_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
 # body frame layout:
 #   +X = long rectangular side  → FOUND camera face
 #   +Z = square endcap face     → LOST camera face
-#   -Z = opposite square endcap → GNSS antenna
+#   -X = opposite long side    → GNSS antenna
 #   +X = same long side as FOUND→ Comms antenna (below FOUND)
 # NOTE: keep CLI flag names for compatibility, but map dimensions to match the face layout above.
 BODY_LONG_M = CLI_ARGS.body_x
@@ -747,13 +899,13 @@ FOUND_Z_OFFSET_FRAC = 0.35
 # sensor boresight vectors in body frame
 VEC_LOST_B  = [0, 0,  1]   # LOST points out +Z (square face)
 VEC_FOUND_B = [1, 0,  0]   # FOUND points out +X (long face)
-VEC_ANT_B   = [0, 0, -1]   # GNSS antenna points out -Z (opposite square face)
+VEC_ANT_B   = [-1, 0,  0]   # GNSS antenna points out -X (opposite long side)
 VEC_COMMS_B = [1, 0, 0]  # Comms antenna points out +X (same face as FOUND)
 
 # sensor positions at center of each face
 POS_LOST_B  = [0.0, 0.0,  0.5 * BODY_SIZE_Z_M]
 POS_FOUND_B = [0.5 * BODY_SIZE_X_M, 0.0, FOUND_Z_OFFSET_FRAC * BODY_SIZE_Z_M]
-POS_ANT_B   = [0.0, 0.0, -0.5 * BODY_SIZE_Z_M]
+POS_ANT_B   = [-0.5 * BODY_SIZE_X_M, 0.0, 0.0]  # [m] -X long side
 POS_COMMS_B = [0.5 * BODY_SIZE_X_M, 0.0, 0.0]  # [m] same +X face as FOUND, lowered toward bus mid-height
 
 # camera FOVs (full angle) and derived half-angles
@@ -994,7 +1146,7 @@ viz = enable_vizard(
     live_stream=LIVE_STREAM_ENABLED,
     broadcast_stream=BROADCAST_STREAM_ENABLED,
 )
-live_telemetry_plot = LiveTelemetryPlot(enabled=PLOTS_ENABLED, compression_power=0.5)  # [-]
+live_telemetry_plot = LiveTelemetryPlot(enabled=LIVE_PLOTS_ENABLED, compression_power=0.5)  # [-]
 
 # Pre-build both visual variants once (OPEN/CLOSED) and hot-swap them during runtime.
 models_dir = os.path.join(os.getcwd(), "models")
@@ -1141,6 +1293,28 @@ found_experiment_fail_nanos_by_reason = {
     "sun_keepout_violation": 0,
 }
 
+lost_gnss_fail_nanos_by_body = {
+    "earth": 0,  # [ns]
+    "sun": 0,  # [ns]
+    "moon": 0,  # [ns]
+}
+
+lost_downlink_fail_nanos_by_body = {
+    "earth": 0,  # [ns]
+    "sun": 0,  # [ns]
+    "moon": 0,  # [ns]
+}
+
+found_gnss_fail_nanos_by_reason = {
+    "earth_not_visible": 0,  # [ns]
+    "sun_keepout_violation": 0,  # [ns]
+}
+
+found_downlink_fail_nanos_by_reason = {
+    "earth_not_visible": 0,  # [ns]
+    "sun_keepout_violation": 0,  # [ns]
+}
+
 uptime_warning_printed = False
 
 uptime_history = {
@@ -1151,6 +1325,10 @@ uptime_history = {
     "found_charging_pct": [],
     "lost_experiment_pct": [],
     "found_experiment_pct": [],
+    "lost_gnss_pct": [],
+    "found_gnss_pct": [],
+    "lost_downlink_pct": [],
+    "found_downlink_pct": [],
 }
 
 # Step in chunks instead of one long run: this gives us model swaps and uptime sampling hooks.
@@ -1281,6 +1459,23 @@ while next_stop_nanos < stop_time_nanos:
                     found_experiment_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
                 if not found_sun_clear:
                     found_experiment_fail_nanos_by_reason["sun_keepout_violation"] += dt_nanos
+
+                if sample_state == "GNSS_FIX":
+                    for body_name in ("earth", "sun", "moon"):
+                        if not uptime_details["lost_body_ok"][body_name]:
+                            lost_gnss_fail_nanos_by_body[body_name] += dt_nanos
+                    if not found_earth_visible:
+                        found_gnss_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
+                    if not found_sun_clear:
+                        found_gnss_fail_nanos_by_reason["sun_keepout_violation"] += dt_nanos
+                elif sample_state == "DOWNLINK":
+                    for body_name in ("earth", "sun", "moon"):
+                        if not uptime_details["lost_body_ok"][body_name]:
+                            lost_downlink_fail_nanos_by_body[body_name] += dt_nanos
+                    if not found_earth_visible:
+                        found_downlink_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
+                    if not found_sun_clear:
+                        found_downlink_fail_nanos_by_reason["sun_keepout_violation"] += dt_nanos
         except Exception as exc:
             if not uptime_warning_printed:
                 print(f"[UPTIME] sample evaluation warning: {exc}")
@@ -1320,6 +1515,31 @@ while next_stop_nanos < stop_time_nanos:
         uptime_history["found_charging_pct"].append(charging_found_pct)
         uptime_history["lost_experiment_pct"].append(experiment_lost_pct)
         uptime_history["found_experiment_pct"].append(experiment_found_pct)
+
+        gnss_lost_pct = (
+            100.0 * lost_uptime_by_state_nanos["GNSS_FIX"] / sampled_time_by_state_nanos["GNSS_FIX"]
+            if sampled_time_by_state_nanos["GNSS_FIX"] > 0
+            else np.nan
+        )
+        gnss_found_pct = (
+            100.0 * found_uptime_by_state_nanos["GNSS_FIX"] / sampled_time_by_state_nanos["GNSS_FIX"]
+            if sampled_time_by_state_nanos["GNSS_FIX"] > 0
+            else np.nan
+        )
+        downlink_lost_pct = (
+            100.0 * lost_uptime_by_state_nanos["DOWNLINK"] / sampled_time_by_state_nanos["DOWNLINK"]
+            if sampled_time_by_state_nanos["DOWNLINK"] > 0
+            else np.nan
+        )
+        downlink_found_pct = (
+            100.0 * found_uptime_by_state_nanos["DOWNLINK"] / sampled_time_by_state_nanos["DOWNLINK"]
+            if sampled_time_by_state_nanos["DOWNLINK"] > 0
+            else np.nan
+        )
+        uptime_history["lost_gnss_pct"].append(gnss_lost_pct)
+        uptime_history["found_gnss_pct"].append(gnss_found_pct)
+        uptime_history["lost_downlink_pct"].append(downlink_lost_pct)
+        uptime_history["found_downlink_pct"].append(downlink_found_pct)
 
     # Visual state mirrors guidance mode: OPEN panels while charging, hidden panels otherwise.
     active_state = _get_guidance_state(guidance)
@@ -1366,7 +1586,7 @@ while next_stop_nanos < stop_time_nanos:
         )
         last_status_overlay_update_nanos = next_stop_nanos
 
-    if PLOTS_ENABLED:
+    if LIVE_PLOTS_ENABLED:
         should_update_live_plot = (
             last_live_plot_update_nanos is None
             or (next_stop_nanos - last_live_plot_update_nanos) >= live_plot_update_period_nanos
@@ -1474,6 +1694,44 @@ if sampled_time_experiment_nanos > 0:
     print(f"[UPTIME]   SUN_KEEPOUT_VIOLATION:{exp_sun_fail_pct:6.2f}%")
     print("[UPTIME]   Note: percentages can overlap when both FOUND conditions fail at once.")
 
+gnss_time_nanos = sampled_time_by_state_nanos.get("GNSS_FIX", 0)  # [ns]
+if gnss_time_nanos > 0:
+    print("[UPTIME] LOST GNSS_FIX fail-time breakdown (inner red keep-out):")
+    for body_name in ("earth", "sun", "moon"):
+        fail_pct = 100.0 * lost_gnss_fail_nanos_by_body[body_name] / gnss_time_nanos  # [%]
+        print(f"[UPTIME]   {body_name.upper():>5}: {fail_pct:6.2f}%")
+    print("[UPTIME]   Note: percentages can overlap when multiple bodies violate at once.")
+
+    print("[UPTIME] FOUND GNSS_FIX fail-time breakdown:")
+    gnss_earth_fail_pct = (
+        100.0 * found_gnss_fail_nanos_by_reason["earth_not_visible"] / gnss_time_nanos
+    )  # [%]
+    gnss_sun_fail_pct = (
+        100.0 * found_gnss_fail_nanos_by_reason["sun_keepout_violation"] / gnss_time_nanos
+    )  # [%]
+    print(f"[UPTIME]   EARTH_NOT_VISIBLE:    {gnss_earth_fail_pct:6.2f}%")
+    print(f"[UPTIME]   SUN_KEEPOUT_VIOLATION:{gnss_sun_fail_pct:6.2f}%")
+    print("[UPTIME]   Note: percentages can overlap when both FOUND conditions fail at once.")
+
+downlink_time_nanos = sampled_time_by_state_nanos.get("DOWNLINK", 0)  # [ns]
+if downlink_time_nanos > 0:
+    print("[UPTIME] LOST DOWNLINK fail-time breakdown (inner red keep-out):")
+    for body_name in ("earth", "sun", "moon"):
+        fail_pct = 100.0 * lost_downlink_fail_nanos_by_body[body_name] / downlink_time_nanos  # [%]
+        print(f"[UPTIME]   {body_name.upper():>5}: {fail_pct:6.2f}%")
+    print("[UPTIME]   Note: percentages can overlap when multiple bodies violate at once.")
+
+    print("[UPTIME] FOUND DOWNLINK fail-time breakdown:")
+    downlink_earth_fail_pct = (
+        100.0 * found_downlink_fail_nanos_by_reason["earth_not_visible"] / downlink_time_nanos
+    )  # [%]
+    downlink_sun_fail_pct = (
+        100.0 * found_downlink_fail_nanos_by_reason["sun_keepout_violation"] / downlink_time_nanos
+    )  # [%]
+    print(f"[UPTIME]   EARTH_NOT_VISIBLE:    {downlink_earth_fail_pct:6.2f}%")
+    print(f"[UPTIME]   SUN_KEEPOUT_VIOLATION:{downlink_sun_fail_pct:6.2f}%")
+    print("[UPTIME]   Note: percentages can overlap when both FOUND conditions fail at once.")
+
 print("[UPTIME] State-by-state availability summary:")
 for state_name in STATE_NAMES:
     state_time_nanos = sampled_time_by_state_nanos[state_name]
@@ -1489,15 +1747,29 @@ for state_name in STATE_NAMES:
         f"LOST={state_lost_pct:6.2f}% FOUND={state_found_pct:6.2f}%"
     )
 
-if PLOTS_ENABLED:
-    plot_paths = _generate_uptime_plots(save_path, uptime_history)
-    if plot_paths:
-        print("[PLOT] Wrote uptime convergence plots:")
-        for path in plot_paths:
-            print(f"[PLOT]   {path}")
+plot_paths = _generate_uptime_plots(save_path, uptime_history)
+if plot_paths:
+    print("[PLOT] Wrote uptime convergence plots:")
+    for path in plot_paths:
+        print(f"[PLOT]   {path}")
 
-    csv_path = _write_uptime_points_csv(save_path, uptime_history)
-    print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+csv_path = _write_uptime_points_csv(save_path, uptime_history)
+print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+
+txt_path = _write_uptime_summary_txt(
+    save_path,
+    lost_uptime_pct, found_uptime_pct,
+    lost_uptime_charging_pct, found_uptime_charging_pct,
+    lost_uptime_experiment_pct, found_uptime_experiment_pct,
+    lost_experiment_fail_nanos_by_body, lost_charging_fail_nanos_by_body,
+    found_charging_fail_nanos_by_reason, found_experiment_fail_nanos_by_reason,
+    lost_gnss_fail_nanos_by_body, lost_downlink_fail_nanos_by_body,
+    found_gnss_fail_nanos_by_reason, found_downlink_fail_nanos_by_reason,
+    sampled_time_nanos, sampled_time_charging_nanos, sampled_time_experiment_nanos,
+    sampled_time_by_state_nanos, lost_uptime_by_state_nanos, found_uptime_by_state_nanos,
+    STATE_NAMES
+)
+print(f"[SUMMARY] Wrote uptime summary TXT: {txt_path}")
 
 # HIL cleanup
 if CLI_ARGS.hil_enable and hil_orchestrator:

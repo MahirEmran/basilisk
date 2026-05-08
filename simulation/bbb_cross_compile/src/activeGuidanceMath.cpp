@@ -315,4 +315,49 @@ bool buildFrameForPlusXTarget(const double plusXTargetHat[3],
     return true;
 }
 
+bool buildFrameForMinusXTarget(const double minusXTargetHat[3],
+                               const double yHintHat[3],
+                               double outX_B[3],
+                               double outY_B[3],
+                               double outZ_B[3])
+{
+    double minusXHat[3] = {0.0, 0.0, 0.0};
+    if (!safeUnit(minusXTargetHat, minusXHat)) {
+        return false;
+    }
+
+    // GNSS antenna boresight is -X, so body +X points opposite the target direction.
+    outX_B[0] = -minusXHat[0];
+    outX_B[1] = -minusXHat[1];
+    outX_B[2] = -minusXHat[2];
+
+    const double yHintProjection = dot3(yHintHat, outX_B);
+    outY_B[0] = yHintHat[0] - yHintProjection * outX_B[0];
+    outY_B[1] = yHintHat[1] - yHintProjection * outX_B[1];
+    outY_B[2] = yHintHat[2] - yHintProjection * outX_B[2];
+
+    if (!safeUnit(outY_B, outY_B)) {
+        double fallback[3] = {0.0, 1.0, 0.0};
+        if (std::fabs(outX_B[1]) >= 0.9) {
+            fallback[0] = 1.0;
+            fallback[1] = 0.0;
+        }
+
+        const double fallbackProjection = dot3(fallback, outX_B);
+        outY_B[0] = fallback[0] - fallbackProjection * outX_B[0];
+        outY_B[1] = fallback[1] - fallbackProjection * outX_B[1];
+        outY_B[2] = fallback[2] - fallbackProjection * outX_B[2];
+        if (!safeUnit(outY_B, outY_B)) {
+            return false;
+        }
+    }
+
+    cross3(outX_B, outY_B, outZ_B);
+    if (!safeUnit(outZ_B, outZ_B)) {
+        return false;
+    }
+
+    return true;
+}
+
 }  // namespace ActiveGuidanceMath

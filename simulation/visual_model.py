@@ -211,18 +211,18 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("body_mat", start_faces)
 
-    # GNSS antenna stalk on the -Z side.
+    # GNSS antenna stalk on the -X side.
     ant_length = 0.08
     ant_radius = 0.005
-    ant_cz = -0.5 * body_size_z_m - 0.5 * ant_length
+    ant_cx = 0.0
     start_faces = len(faces)
     add_cylinder_triangles(
         verts,
         faces,
-        center=[0.0, 0.0, ant_cz],
+        center=[ant_cx, -ant_length, 0.0],
         radius=ant_radius,
         height=ant_length,
-        axis="z",
+        axis="y",
     )
     mark_component("antenna_mat", start_faces)
 

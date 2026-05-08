@@ -41,6 +41,12 @@ bool buildFrameForPlusXTarget(const double plusXTargetHat[3],
                                double outY_B[3],
                                double outZ_B[3]);
 
+bool buildFrameForMinusXTarget(const double minusXTargetHat[3],
+                               const double yHintHat[3],
+                               double outX_B[3],
+                               double outY_B[3],
+                               double outZ_B[3]);
+
 }  // namespace ActiveGuidanceMath
 
 #endif

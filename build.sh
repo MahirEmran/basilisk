@@ -7,6 +7,7 @@ SIM_DIR="${BSK_ROOT}/simulation/"
 EXTERNAL_DIR="${SIM_DIR}/External"
 MODE="HYBRID"
 ENABLE_PLOTS="${ENABLE_PLOTS:-0}"
+REBUILD="${REBUILD:-0}"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +19,7 @@ Notes:
   - If no argument is provided, the default is 1 hour.
   - Plot windows and saved plot outputs are disabled by default.
     Set ENABLE_PLOTS=1 to turn them on.
+  - Full rebuild is disabled by default. Set REBUILD=1 to rebuild Basilisk from scratch.
   - Outputs are written under simulation/.
 EOF
 }
@@ -69,8 +71,11 @@ if [[ "${RUN_KIND}" == "test" ]]; then
   trap cleanup_test_artifacts EXIT
 fi
 
-echo "[BUILD] Rebuilding Basilisk with external modules from: ${EXTERNAL_DIR}"
-# "${PYTHON_BIN}" "${BSK_ROOT}/conanfile.py" --clean --pathToExternalModules "${EXTERNAL_DIR}"
+if [[ "${REBUILD}" == "1" ]]; then
+  echo "[REBUILD] Rebuilding Basilisk from scratch with external modules from: ${EXTERNAL_DIR}"
+  "${PYTHON_BIN}" "${BSK_ROOT}/conanfile.py" --clean --pathToExternalModules "${EXTERNAL_DIR}"
+fi
+
 
 echo "[RUN] Running HuskySat simulation for ${HOURS} hour(s) in mode ${MODE}"
 cd "${SIM_DIR}"
