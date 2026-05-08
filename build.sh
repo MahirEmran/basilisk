@@ -6,8 +6,8 @@ PYTHON_BIN="${BSK_ROOT}/.venv/bin/python"
 SIM_DIR="${BSK_ROOT}/simulation/"
 EXTERNAL_DIR="${SIM_DIR}/External"
 MODE="HYBRID"
-ENABLE_PLOTS="${ENABLE_PLOTS:-0}"
-REBUILD="${REBUILD:-0}"
+ENABLE_PLOTS=0
+REBUILD=0
 
 usage() {
   cat <<'EOF'
@@ -17,9 +17,8 @@ Usage:
 
 Notes:
   - If no argument is provided, the default is 1 hour.
-  - Plot windows and saved plot outputs are disabled by default.
-    Set ENABLE_PLOTS=1 to turn them on.
-  - Full rebuild is disabled by default. Set REBUILD=1 to rebuild Basilisk from scratch.
+  - Plot windows and saved plot outputs are disabled by default. Use --enable-plots.
+  - Full rebuild is disabled by default. Use --rebuild.
   - Outputs are written under simulation/.
 EOF
 }
@@ -35,15 +34,36 @@ if [[ ! -d "${EXTERNAL_DIR}" ]]; then
   exit 1
 fi
 
-ARG="${1:-1}"
+POSITIONAL=()
+for arg in "$@"; do
+  case "${arg}" in
+    --rebuild)
+      REBUILD=1
+      ;;
+    --enable-plots)
+      ENABLE_PLOTS=1
+      ;;
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    *)
+      POSITIONAL+=("${arg}")
+      ;;
+  esac
+done
+
+if (( ${#POSITIONAL[@]} > 1 )); then
+  echo "Error: too many arguments. Use 'test' or a numeric hour value." >&2
+  usage >&2
+  exit 1
+fi
+
+ARG="${POSITIONAL[0]:-1}"
 HOURS=""
 RUN_KIND="normal"
 
 case "${ARG}" in
-  -h|--help|help)
-    usage
-    exit 0
-    ;;
   test)
     RUN_KIND="test"
     HOURS="0.01"
