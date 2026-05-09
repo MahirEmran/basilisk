@@ -2,34 +2,37 @@
 
 set -euo pipefail
 
-SIM_DIR="$(dirname "$0")/simulation"
-PYTHON_BIN="$(dirname "$0")/.venv/bin/python"
-SIM_SCRIPT="$SIM_DIR/simulate_cubesat.py"
+SIM_DIR="."
 
-# FOV ranges
-LOST_FOVS=(10 15 20)
-FOUND_FOVS=(50 55 60 65 70 75 80 85)
+# FOV ranges for this test
+LOST_FOVS=(20 25 30)
+FOUND_FOVS=(60 65 70 75 80 85 90)
 
 MONTH_HOURS=744 # 31 days
 
-MAX_PROCS=4
+MAX_PROCS=2
 
 run_sim() {
   local LOST="$1"
   local FOUND="$2"
   local OUT_FILE="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}.bin"
+  local PLOTS_DIR="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}_plots"
   local LOG_FILE="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}.log"
-  local SUMMARY_FILE="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}_plots/summary.txt"
+  local SUMMARY_FILE="$PLOTS_DIR/summary.txt"
+
   echo "[RUN] LOST_FOV=$LOST, FOUND_FOV=$FOUND -> $OUT_FILE"
-  "$PYTHON_BIN" "$SIM_SCRIPT" \
+
+  "$(dirname "$0")/build.sh" \
     --lost-fov "$LOST" \
     --found-fov "$FOUND" \
-    --hours "$MONTH_HOURS" \
-    --bin-path "$OUT_FILE" \
+    --output "$OUT_FILE" \
+    "$MONTH_HOURS" \
     > "$LOG_FILE" 2>&1
 
-  # Extract all [UPTIME] blocks and their breakdowns/notes
-  awk '/^\[UPTIME\]/ {p=1} p && (/^\[UPTIME\]/ || /^\s/ || /^$/) {print} p && !(/^\[UPTIME\]/ || /^\s/ || /^$/) {p=0}' "$LOG_FILE" > "$SUMMARY_FILE"
+  rm -f "$OUT_FILE"
+  rm -f $PLOTS_DIR/*.csv
+  rm -f $PLOTS_DIR/*.png
+
 }
 
 PIDS=()
@@ -50,6 +53,6 @@ for pid in "${PIDS[@]}"; do
   wait "$pid"
 done
 
-rm $SIM_DIR/*.log
+# rm -f $SIM_DIR/*.log
 
 echo "[DONE] All FOV combinations completed."

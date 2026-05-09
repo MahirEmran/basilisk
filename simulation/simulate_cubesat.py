@@ -500,6 +500,60 @@ class LiveTelemetryPlot:
         self._fig.canvas.flush_events()
         self._plt.pause(0.001)
 
+    def save_eps_plots(self, save_path):
+        """Save EPS telemetry plots to file with log scale time axis."""
+        if not self.times_hr:
+            print("[PLOT] No EPS telemetry data to save")
+            return []
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:
+            print(f"[PLOT] Skipping EPS plots (matplotlib unavailable): {exc}")
+            return []
+
+        bin_path = os.path.abspath(save_path)
+        bin_dir = os.path.dirname(bin_path)
+        bin_stem = os.path.splitext(os.path.basename(bin_path))[0]
+        plot_dir = os.path.join(bin_dir, f"{bin_stem}_plots")
+        os.makedirs(plot_dir, exist_ok=True)
+
+        t_hours = np.asarray(self.times_hr, dtype=float)
+        net_power = np.asarray(self.net_power_w, dtype=float)
+        soc = np.asarray(self.soc_pct, dtype=float)
+        temp = np.asarray(self.temp_c, dtype=float)
+
+        saved_paths = []
+
+        # Create EPS plots with log scale time
+        fig, axes = plt.subplots(3, 1, figsize=(10.0, 8.0), sharex=True)
+        fig.suptitle("EPS / Thermal Telemetry (Log Scale Time)")
+
+        axes[0].semilogx(t_hours, net_power, color="tab:red", linewidth=1.6)
+        axes[0].set_ylabel("Net Power [W]")
+        axes[0].grid(True, alpha=0.25)
+        axes[0].set_title("Power")
+
+        axes[1].semilogx(t_hours, soc, color="tab:green", linewidth=1.6)
+        axes[1].set_ylabel("SOC [%]")
+        axes[1].grid(True, alpha=0.25)
+        axes[1].set_title("Battery State of Charge")
+
+        axes[2].semilogx(t_hours, temp, color="tab:blue", linewidth=1.6)
+        axes[2].set_ylabel("Temp [C]")
+        axes[2].set_xlabel("Time [h] (log scale)")
+        axes[2].grid(True, alpha=0.25)
+        axes[2].set_title("Temperature")
+
+        fig.tight_layout()
+
+        eps_plot_path = os.path.join(plot_dir, f"{bin_stem}_eps_telemetry.png")
+        fig.savefig(eps_plot_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(eps_plot_path)
+
+        return saved_paths
+
 
 def parse_cli_args():
     parser = argparse.ArgumentParser(description="Run CubeSat camera simulation with selectable ADCS mode.")
@@ -607,7 +661,18 @@ def parse_cli_args():
     parser.add_argument(
         "--enable-plots",
         action="store_true",
-        help="Enable live telemetry plotting; end-of-run uptime plots are generated automatically.",
+        default=True,
+        help="Enable end-of-run uptime plots (enabled by default).",
+    )
+    parser.add_argument(
+        "--enable-live-eps-plots",
+        action="store_true",
+        help="Enable live EPS telemetry plotting during simulation (disabled by default for performance).",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Only generate uptime summary.txt, skip .bin file and plots.",
     )
     parser.add_argument(
         "--realtime",
@@ -721,7 +786,8 @@ def parse_cli_args():
 
 
 CLI_ARGS = parse_cli_args()
-LIVE_PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
+LIVE_PLOTS_ENABLED = bool(CLI_ARGS.enable_live_eps_plots)
+END_OF_RUN_PLOTS_ENABLED = bool(CLI_ARGS.enable_plots)
 REALTIME_ENABLED = bool(CLI_ARGS.realtime) or bool(CLI_ARGS.hil_enable)
 LIVE_STREAM_ENABLED = bool(CLI_ARGS.live_stream) or bool(CLI_ARGS.hil_enable)
 BROADCAST_STREAM_ENABLED = bool(CLI_ARGS.broadcast_stream)
@@ -1748,13 +1814,21 @@ for state_name in STATE_NAMES:
     )
 
 plot_paths = _generate_uptime_plots(save_path, uptime_history)
-if plot_paths:
+if END_OF_RUN_PLOTS_ENABLED and plot_paths:
     print("[PLOT] Wrote uptime convergence plots:")
     for path in plot_paths:
         print(f"[PLOT]   {path}")
 
 csv_path = _write_uptime_points_csv(save_path, uptime_history)
-print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+if END_OF_RUN_PLOTS_ENABLED:
+    print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
+
+# Save EPS telemetry plots at the end
+eps_plot_paths = live_telemetry_plot.save_eps_plots(save_path)
+if eps_plot_paths:
+    print("[PLOT] Wrote EPS telemetry plots:")
+    for path in eps_plot_paths:
+        print(f"[PLOT]   {path}")
 
 txt_path = _write_uptime_summary_txt(
     save_path,

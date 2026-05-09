@@ -6,8 +6,11 @@ PYTHON_BIN="${BSK_ROOT}/.venv/bin/python"
 SIM_DIR="${BSK_ROOT}/simulation/"
 EXTERNAL_DIR="${SIM_DIR}/External"
 MODE="HYBRID"
-ENABLE_PLOTS=1
+ENABLE_LIVE_EPS_PLOTS=0
 REBUILD=0
+LOST_FOV=25.5
+FOUND_FOV=75.6
+OUTPUT_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -15,11 +18,19 @@ Usage:
   ./build.sh test        Rebuild Basilisk, run a short smoke simulation, then remove generated output.
   ./build.sh <hours>     Rebuild Basilisk and run simulation for <hours> (examples: 24, 744).
 
+Options:
+  --rebuild              Full rebuild of Basilisk from scratch
+  --enable-live-eps-plots Enable live EPS telemetry plotting during simulation (disabled by default for performance)
+  --lost-fov <deg>       LOST camera full FOV in degrees (default: 25.5)
+  --found-fov <deg>      FOUND camera full FOV in degrees (default: 75.6)
+  --output <path>        Custom output .bin file path (default: simulation/output_<hours>h.bin)
+
 Notes:
   - If no argument is provided, the default is 1 hour.
-  - Plot windows and saved plot outputs are disabled by default. Use --enable-plots.
+  - End-of-run uptime plots are generated automatically by default.
+  - Live EPS telemetry plotting is disabled by default for performance. Use --enable-live-eps-plots to enable.
   - Full rebuild is disabled by default. Use --rebuild.
-  - Outputs are written under simulation/.
+  - Outputs are written under simulation/ unless --output is specified.
 EOF
 }
 
@@ -35,20 +46,35 @@ if [[ ! -d "${EXTERNAL_DIR}" ]]; then
 fi
 
 POSITIONAL=()
-for arg in "$@"; do
-  case "${arg}" in
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
     --rebuild)
       REBUILD=1
+      shift
       ;;
-    --enable-plots)
-      ENABLE_PLOTS=1
+    --enable-live-eps-plots)
+      ENABLE_LIVE_EPS_PLOTS=1
+      shift
+      ;;
+    --lost-fov)
+      LOST_FOV="$2"
+      shift 2
+      ;;
+    --found-fov)
+      FOUND_FOV="$2"
+      shift 2
+      ;;
+    --output)
+      OUTPUT_PATH="$2"
+      shift 2
       ;;
     -h|--help|help)
       usage
       exit 0
       ;;
     *)
-      POSITIONAL+=("${arg}")
+      POSITIONAL+=("${1}")
+      shift
       ;;
   esac
 done
@@ -80,7 +106,11 @@ case "${ARG}" in
 esac
 
 HOURS_TAG="${HOURS//./p}"
-SIM_BIN_PATH="${SIM_DIR}/output_${HOURS_TAG}h.bin"
+if [[ -n "${OUTPUT_PATH}" ]]; then
+  SIM_BIN_PATH="${OUTPUT_PATH}"
+else
+  SIM_BIN_PATH="${SIM_DIR}/output_${HOURS_TAG}h.bin"
+fi
 PLOTS_DIR="${SIM_BIN_PATH%.bin}_plots"
 
 if [[ "${RUN_KIND}" == "test" ]]; then
@@ -99,20 +129,24 @@ fi
 
 echo "[RUN] Running HuskySat simulation for ${HOURS} hour(s) in mode ${MODE}"
 cd "${SIM_DIR}"
-if [[ "${ENABLE_PLOTS}" == "1" ]]; then
+if [[ "${ENABLE_LIVE_EPS_PLOTS}" == "1" ]]; then
   PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
     "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
     --guidance-backend EXTERNAL_CPP \
     --mode "${MODE}" \
     --hours "${HOURS}" \
+    --lost-fov "${LOST_FOV}" \
+    --found-fov "${FOUND_FOV}" \
     --bin-path "${SIM_BIN_PATH}" \
-    --enable-plots
+    --enable-live-eps-plots
 else
   PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
     "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
     --guidance-backend EXTERNAL_CPP \
     --mode "${MODE}" \
     --hours "${HOURS}" \
+    --lost-fov "${LOST_FOV}" \
+    --found-fov "${FOUND_FOV}" \
     --bin-path "${SIM_BIN_PATH}"
 fi
 
