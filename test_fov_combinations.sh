@@ -4,27 +4,30 @@ set -euo pipefail
 
 SIM_DIR="."
 
-# FOV ranges for this test
-LOST_FOVS=(20 25 30)
-FOUND_FOVS=(60 65 70 75 80 85 90)
+# Fixed camera FOVs
+LOST_FOV=25
+FOUND_FOV=75
+
+# Exclusion buffer ranges for FOUND baffle trade study
+FOUND_EXCLUSION_BUFFERS=(5 10 15 20 25 30)
 
 MONTH_HOURS=744 # 31 days
 
-MAX_PROCS=2
+MAX_PROCS=1
 
 run_sim() {
-  local LOST="$1"
-  local FOUND="$2"
-  local OUT_FILE="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}.bin"
-  local PLOTS_DIR="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}_plots"
-  local LOG_FILE="$SIM_DIR/output_LOST${LOST}_FOUND${FOUND}.log"
+  local FOUND_EXCLUSION_BUFFER="$1"
+  local OUT_FILE="$SIM_DIR/output_LOST${LOST_FOV}_FOUND${FOUND_FOV}_FOUND_EXCL${FOUND_EXCLUSION_BUFFER}.bin"
+  local PLOTS_DIR="$SIM_DIR/output_LOST${LOST_FOV}_FOUND${FOUND_FOV}_FOUND_EXCL${FOUND_EXCLUSION_BUFFER}_plots"
+  local LOG_FILE="$SIM_DIR/output_LOST${LOST_FOV}_FOUND${FOUND_FOV}_FOUND_EXCL${FOUND_EXCLUSION_BUFFER}.log"
   local SUMMARY_FILE="$PLOTS_DIR/summary.txt"
 
-  echo "[RUN] LOST_FOV=$LOST, FOUND_FOV=$FOUND -> $OUT_FILE"
+  echo "[RUN] LOST_FOV=$LOST_FOV, FOUND_FOV=$FOUND_FOV, FOUND_EXCLUSION_BUFFER=$FOUND_EXCLUSION_BUFFER -> $OUT_FILE"
 
   "$(dirname "$0")/build.sh" \
-    --lost-fov "$LOST" \
-    --found-fov "$FOUND" \
+    --lost-fov "$LOST_FOV" \
+    --found-fov "$FOUND_FOV" \
+    --found-exclusion-buffer "$FOUND_EXCLUSION_BUFFER" \
     --output "$OUT_FILE" \
     "$MONTH_HOURS" \
     > "$LOG_FILE" 2>&1
@@ -37,15 +40,13 @@ run_sim() {
 
 PIDS=()
 
-for LOST in "${LOST_FOVS[@]}"; do
-  for FOUND in "${FOUND_FOVS[@]}"; do
-    run_sim "$LOST" "$FOUND" &
-    PIDS+=("$!")
-    if (( ${#PIDS[@]} >= MAX_PROCS )); then
-      wait "${PIDS[0]}"
-      PIDS=("${PIDS[@]:1}")
-    fi
-  done
+for FOUND_EXCLUSION_BUFFER in "${FOUND_EXCLUSION_BUFFERS[@]}"; do
+  run_sim "$FOUND_EXCLUSION_BUFFER" &
+  PIDS+=("$!")
+  if (( ${#PIDS[@]} >= MAX_PROCS )); then
+    wait "${PIDS[0]}"
+    PIDS=("${PIDS[@]:1}")
+  fi
 done
 
 # Wait for all remaining jobs
@@ -55,4 +56,4 @@ done
 
 # rm -f $SIM_DIR/*.log
 
-echo "[DONE] All FOV combinations completed."
+echo "[DONE] All FOUND exclusion buffer combinations completed."

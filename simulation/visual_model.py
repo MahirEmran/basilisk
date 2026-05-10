@@ -23,7 +23,6 @@ def add_box_triangles(vertices, faces, center, size):
     base = len(vertices) + 1
     vertices.extend(box_vertices)
 
-    # Two triangles per face, with consistent winding.
     box_faces = [
         [base + 0, base + 1, base + 2], [base + 0, base + 2, base + 3],
         [base + 4, base + 6, base + 5], [base + 4, base + 7, base + 6],
@@ -45,7 +44,6 @@ def add_cylinder_triangles(vertices, faces, center, radius, height, n_segs=16, a
     axis_start = -0.5 * height  # [m]
     axis_end = 0.5 * height  # [m]
 
-    # Build two rings: start cap then end cap.
     for axis_offset in (axis_start, axis_end):
         for k in range(n_segs):
             ang = 2.0 * np.pi * k / n_segs
@@ -86,10 +84,8 @@ def add_cylinder_triangles(vertices, faces, center, radius, height, n_segs=16, a
     for k in range(n_segs):
         k1 = k
         k2 = (k + 1) % n_segs
-        # Side wall (quad split into two triangles).
         faces.append([base + k1, base + k2, base + n_segs + k2])
         faces.append([base + k1, base + n_segs + k2, base + n_segs + k1])
-        # Bottom and top caps.
         faces.append([bot_cap, base + k2, base + k1])
         faces.append([top_cap, base + n_segs + k1, base + n_segs + k2])
 
@@ -158,7 +154,6 @@ def write_obj(path, vertices, faces, face_materials, panel_open):
             mtl_file.write("newmtl panel_mat\nKd 0.56 0.56 0.58\nKa 0.24 0.24 0.24\nKs 0.03 0.03 0.03\n\n")
         mtl_file.write("newmtl cell_mat\nKd 1.00 1.00 1.00\nKa 0.90 0.90 0.90\nKs 0.02 0.02 0.02\n\n")
 
-    # Store a face normal for each triangle to keep Vizard lighting stable.
     normals = []
     face_records = []
     for tri, mtl in zip(faces, face_materials):
@@ -186,7 +181,6 @@ def write_obj(path, vertices, faces, face_materials, panel_open):
             if mtl != current_mtl:
                 obj_file.write(f"usemtl {mtl}\n")
                 current_mtl = mtl
-            # Emit both windings so the mesh remains visible from both sides.
             obj_file.write(f"f {tri[0]}//{n_idx} {tri[1]}//{n_idx} {tri[2]}//{n_idx}\n")
             obj_file.write(f"f {tri[0]}//{n_idx} {tri[2]}//{n_idx} {tri[1]}//{n_idx}\n")
 
@@ -211,7 +205,6 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("body_mat", start_faces)
 
-    # GNSS antenna stalk on the -X side.
     ant_length = 0.08
     ant_radius = 0.005
     ant_cx = 0.0
@@ -226,7 +219,6 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("antenna_mat", start_faces)
 
-    # Comms antenna stalk on the +X side (same pointing face as FOUND), shifted lower in Z.
     comms_ant_cx = 0.5 * body_size_x_m  # [m]
     comms_ant_cy = 0.0  # [m]
     comms_ant_cz = 0.0  # [m]
@@ -241,7 +233,6 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     )
     mark_component("antenna_mat", start_faces)
 
-    # Solar-cell tiles are visual only and intentionally do not drive the power model.
     solar_cell_cols = 2  # [-]
     solar_cell_rows = 3  # [-]
     solar_cell_area_m2 = 27.0e-4  # [m^2]
@@ -271,73 +262,18 @@ def build_satellite_obj(path, panels_open, body_size_x_m, body_size_y_m, body_si
     mark_component("panel_mat", start_faces)
 
     if panels_open:
-        print("hi")
-        # The deployed panel spans carry 12 of the 18 visible cells.
-        # add_xz_face_cell_grid(
-        #     verts,
-        #     faces,
-        #     face_materials,
-        #     face_center_x_m=panel_open_x_m,
-        #     face_surface_y_m=panel_face_sign * panel_open_y_m,
-        #     face_center_z_m=0.0,
-        #     face_span_x_m=panel_span_x_m,
-        #     face_span_z_m=panel_span_z_m,
-        #     cell_span_x_m=solar_cell_span_x_m,
-        #     cell_span_z_m=solar_cell_span_z_m,
-        #     cell_thickness_m=solar_cell_thickness_m,
-        #     n_cols=solar_cell_cols,
-        #     n_rows=solar_cell_rows,
-        #     normal_sign=panel_face_sign,
-        #     material_name="cell_mat",
-        # )
-        # add_xz_face_cell_grid(
-        #     verts,
-        #     faces,
-        #     face_materials,
-        #     face_center_x_m=panel_open_x_m + body_size_y_m + panel_span_x_m,
-        #     face_surface_y_m=panel_face_sign * panel_open_y_m,
-        #     face_center_z_m=0.0,
-        #     face_span_x_m=panel_span_x_m,
-        #     face_span_z_m=panel_span_z_m,
-        #     cell_span_x_m=solar_cell_span_x_m,
-        #     cell_span_z_m=solar_cell_span_z_m,
-        #     cell_thickness_m=solar_cell_thickness_m,
-        #     n_cols=solar_cell_cols,
-        #     n_rows=solar_cell_rows,
-        #     normal_sign=panel_face_sign,
-        #     material_name="cell_mat",
-        # )
+        pass
     else:
-        # Stowed panels leave only the bus-face tiles visible.
         pass
     bus_face_center_x_m = 0.0  # [m]
     bus_face_center_y_m = 0.5 * body_size_y_m  # [m]
     bus_face_center_z_m = 0.0  # [m]
     bus_face_sign = 1.0  # [-]
-    # add_xz_face_cell_grid(
-    #     verts,
-    #     faces,
-    #     face_materials,
-    #     face_center_x_m=bus_face_center_x_m,
-    #     face_surface_y_m=bus_face_center_y_m,
-    #     face_center_z_m=bus_face_center_z_m,
-    #     face_span_x_m=body_size_x_m,
-    #     face_span_z_m=body_size_z_m,
-    #     cell_span_x_m=solar_cell_span_x_m,
-    #     cell_span_z_m=solar_cell_span_z_m,
-    #     cell_thickness_m=solar_cell_thickness_m,
-    #     n_cols=solar_cell_cols,
-    #     n_rows=solar_cell_rows,
-    #     normal_sign=bus_face_sign,
-    #     material_name="cell_mat",
-    # )
-
     write_obj(path, verts, faces, face_materials, panel_open=panels_open)
 
 
 def apply_visual_model(viz, spacecraft_tag, model_path):
     """Replace spacecraft visual with a single custom model path."""
-    # createCustomModel appends globally, so clear first to avoid model stacking.
     vizSupport.customModelList = []
     vizSupport.createCustomModel(
         viz,

@@ -12,12 +12,12 @@ from typing import Optional, Dict, Any
 import numpy as np
 
 from .hil_packet_codec import (
-    HilPacketCodec, TruthNavPacket, FcCommandPacket, HealthPacket,
-    create_truth_nav_packet, create_fc_command_packet, create_health_packet
+    HilPacketCodec, FcCommandPacket,
+    create_truth_nav_packet, create_health_packet
 )
-from .hil_transport_udp import HilTransportUDP, create_udp_transport
-from .hil_transport_zmq import HilTransportZMQ, create_zmq_transport
-from .hil_watchdog import HilWatchdog, WatchdogConfig, create_watchdog
+from .hil_transport_udp import create_udp_transport
+from .hil_transport_zmq import create_zmq_transport
+from .hil_watchdog import HilWatchdog, create_watchdog
 
 
 class HilOrchestrator:
@@ -112,10 +112,6 @@ class HilOrchestrator:
                 return False
 
             # Create watchdog
-            watchdog_config = WatchdogConfig(
-                timeout_ms=self.timeout_ms,
-                hold_last_max_ms=self.hold_last_max_ms
-            )
             self.watchdog = create_watchdog(self.timeout_ms)
 
             # Set watchdog callbacks

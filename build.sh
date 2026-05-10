@@ -10,6 +10,8 @@ ENABLE_LIVE_EPS_PLOTS=0
 REBUILD=0
 LOST_FOV=25.5
 FOUND_FOV=75.6
+LOST_EXCLUSION_BUFFER=10.0
+FOUND_EXCLUSION_BUFFER=10.0
 OUTPUT_PATH=""
 
 usage() {
@@ -23,6 +25,8 @@ Options:
   --enable-live-eps-plots Enable live EPS telemetry plotting during simulation (disabled by default for performance)
   --lost-fov <deg>       LOST camera full FOV in degrees (default: 25.5)
   --found-fov <deg>      FOUND camera full FOV in degrees (default: 75.6)
+  --lost-exclusion-buffer <deg> LOST exclusion cone buffer in degrees added to half-FOV (default: 10.0)
+  --found-exclusion-buffer <deg> FOUND exclusion cone buffer in degrees added to half-FOV (default: 10.0)
   --output <path>        Custom output .bin file path (default: simulation/output_<hours>h.bin)
 
 Notes:
@@ -62,6 +66,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --found-fov)
       FOUND_FOV="$2"
+      shift 2
+      ;;
+    --lost-exclusion-buffer)
+      LOST_EXCLUSION_BUFFER="$2"
+      shift 2
+      ;;
+    --found-exclusion-buffer)
+      FOUND_EXCLUSION_BUFFER="$2"
       shift 2
       ;;
     --output)
@@ -137,6 +149,8 @@ if [[ "${ENABLE_LIVE_EPS_PLOTS}" == "1" ]]; then
     --hours "${HOURS}" \
     --lost-fov "${LOST_FOV}" \
     --found-fov "${FOUND_FOV}" \
+    --lost-exclusion-buffer "${LOST_EXCLUSION_BUFFER}" \
+    --found-exclusion-buffer "${FOUND_EXCLUSION_BUFFER}" \
     --bin-path "${SIM_BIN_PATH}" \
     --enable-live-eps-plots
 else
@@ -147,6 +161,8 @@ else
     --hours "${HOURS}" \
     --lost-fov "${LOST_FOV}" \
     --found-fov "${FOUND_FOV}" \
+    --lost-exclusion-buffer "${LOST_EXCLUSION_BUFFER}" \
+    --found-exclusion-buffer "${FOUND_EXCLUSION_BUFFER}" \
     --bin-path "${SIM_BIN_PATH}"
 fi
 

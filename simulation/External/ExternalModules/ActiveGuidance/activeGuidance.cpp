@@ -83,9 +83,7 @@ bool parseStationToken(const std::string& token,
 
 ActiveGuidance::ActiveGuidance()
 {
-    // rhoRad is Earth's apparent half-angle from a circular 400 km orbit:
-    // rho = asin(Re / (Re + h)).
-    // This is the cone half-angle used for "Earth-limb" pointing in EXPERIMENT mode.
+    // Earth-limb cone half-angle at 400 km.
     this->rhoRad = ActiveGuidanceMath::earthLimbHalfAngleRad(kEarthRadiusKm, kOrbitAltitudeKm);
     this->earthHalfAngleDeg = this->rhoRad * kRad2Deg;
     this->refreshThresholds();
@@ -122,8 +120,6 @@ void ActiveGuidance::Reset(uint64_t CurrentSimNanos)
 
 void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
 {
-    // Fail-safe behavior: if required navigation data is unavailable,
-    // publish identity reference (zero attitude command, zero rates).
     if (!this->scStateInMsg.isLinked() || !this->scStateInMsg.isWritten()) {
         this->writeIdentityReference(CurrentSimNanos);
         return;
@@ -133,20 +129,17 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
     double r_N[3] = {scState.r_BN_N[0], scState.r_BN_N[1], scState.r_BN_N[2]};
     const double rMag = std::sqrt(r_N[0] * r_N[0] + r_N[1] * r_N[1] + r_N[2] * r_N[2]);
 
-    // If position is invalid/near-zero, geometric LOS vectors become undefined.
     if (rMag < kValidStatePosFloorM) {
         this->writeIdentityReference(CurrentSimNanos);
         return;
     }
 
-    // Earth direction as seen from spacecraft COM (nadir line-of-sight).
     double earthHat_sc[3] = {
         -r_N[0] / rMag,
         -r_N[1] / rMag,
         -r_N[2] / rMag
     };
 
-    // Sun line-of-sight from spacecraft COM. If no Sun message exists, fall back to configured inertial direction.
     double sunHat_sc[3] = {
         this->defaultSunHat_N[0],
         this->defaultSunHat_N[1],
@@ -162,7 +155,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         sunAbs_N[1] = sunState.PositionVector[1];
         sunAbs_N[2] = sunState.PositionVector[2];
 
-        // Convert absolute Sun position to spacecraft->Sun LOS.
         double sunRel_N[3] = {
             sunAbs_N[0] - r_N[0],
             sunAbs_N[1] - r_N[1],
@@ -173,7 +165,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         }
     }
 
-    // Optional Moon line-of-sight from spacecraft COM, used as an extra LOST keep-out body in EXPERIMENT mode.
     double moonHat_sc[3] = {0.0, 0.0, 0.0};
     bool hasMoonHat = false;
     if (this->moonStateInMsg.isLinked() && this->moonStateInMsg.isWritten()) {
@@ -190,11 +181,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
     double sigma_BN[3] = {scState.sigma_BN[0], scState.sigma_BN[1], scState.sigma_BN[2]};
     MRP2C(sigma_BN, c_BN);
 
-    // FOUND camera is physically offset from COM.
-    // Rotate that body-frame offset into inertial and add it to COM position.
-    // Using FOUND's true location keeps Earth/Sun cone tests accurate near boundaries.
-    // MRP2C returns C_BN (inertial->body). To rotate body vector into inertial,
-    // we use C_NB = C_BN^T. The explicit indexing below performs that transpose multiply.
     double posFoundOffset_N[3] = {
         c_BN[0][0] * this->posFound_B[0] + c_BN[1][0] * this->posFound_B[1] + c_BN[2][0] * this->posFound_B[2],
         c_BN[0][1] * this->posFound_B[0] + c_BN[1][1] * this->posFound_B[1] + c_BN[2][1] * this->posFound_B[2],
@@ -207,8 +193,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         r_N[2] + posFoundOffset_N[2]
     };
 
-    // Comms antenna is physically offset from COM.
-    // Use the antenna location for downlink LOS geometry instead of COM.
     double posCommsOffset_N[3] = {
         c_BN[0][0] * this->posComms_B[0] + c_BN[1][0] * this->posComms_B[1] + c_BN[2][0] * this->posComms_B[2],
         c_BN[0][1] * this->posComms_B[0] + c_BN[1][1] * this->posComms_B[1] + c_BN[2][1] * this->posComms_B[2],
@@ -225,7 +209,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         foundPos_N[1] * foundPos_N[1] +
         foundPos_N[2] * foundPos_N[2]
     );
-    // Recompute Earth direction from FOUND camera location (not COM).
     double earthHat_found[3] = {earthHat_sc[0], earthHat_sc[1], earthHat_sc[2]};
     if (foundPosMag >= kValidStatePosFloorM) {
         earthHat_found[0] = -foundPos_N[0] / foundPosMag;
@@ -233,7 +216,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         earthHat_found[2] = -foundPos_N[2] / foundPosMag;
     }
 
-    // Recompute Sun direction from FOUND camera location (not COM).
     double sunHat_found[3] = {sunHat_sc[0], sunHat_sc[1], sunHat_sc[2]};
     if (hasSunAbs) {
         double sunRelFound_N[3] = {
@@ -244,10 +226,8 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         ActiveGuidanceMath::safeUnit(sunRelFound_N, sunHat_found);
     }
 
-    // CHARGING target: point body -X at the Sun so body +X (FOUND boresight) stays anti-sun.
     double rollOnlyX_B[3] = {-sunHat_found[0], -sunHat_found[1], -sunHat_found[2]};
     std::vector<const double*> noExtras;
-    // For this +X choice, sweep roll to maximize LOST (+Z) minimum separation from keep-out bodies.
     const ActiveGuidanceMath::RollSolveResult rollOnlyResult = ActiveGuidanceMath::solveRollForLostClearance(
         rollOnlyX_B,
         earthHat_sc,
@@ -256,12 +236,7 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         this->hasPrevRoll,
         this->prevRollDeg
     );
-    // Interpretation:
-    // rollOnlyResult.scoreDeg = max_roll min(ang(LOST, Earth), ang(LOST, Sun))
-    // in CHARGING geometry (Moon intentionally excluded from CHARGING gate).
-
-    // If Sun-Earth angle is below Earth's apparent half-angle, Sun is geometrically hidden by Earth.
-    // HYBRID uses this as a Sun-visibility gate before allowing CHARGING.
+    // Sun-Earth LOS angle for eclipse-style gating in HYBRID mode.
     const double sunEarthAngleDeg = ActiveGuidanceMath::angleDegBetween(sunHat_found, earthHat_found);
 
     double x_B[3] = {rollOnlyX_B[0], rollOnlyX_B[1], rollOnlyX_B[2]};
@@ -307,12 +282,9 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         const double clearThresholdDeg = chargingExitBand ? this->chargeExitClearDeg : this->chargeEnterClearDeg;
         const double sunVisThresholdDeg = chargingExitBand ? this->chargeExitSunVisDeg : this->chargeEnterSunVisDeg;
 
-        // Enter/exit thresholds create hysteresis to avoid chatter between CHARGING and EXPERIMENT.
         const bool canCharge =
             (rollOnlyResult.scoreDeg >= clearThresholdDeg) &&
             (sunEarthAngleDeg >= sunVisThresholdDeg);
-        // First inequality ensures LOST has margin to Earth+Sun in CHARGING.
-        // Second inequality ensures Sun is not eclipsed by Earth from FOUND viewpoint.
 
         if (canCharge) {
             selectedState = "CHARGING";
@@ -353,7 +325,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
         }
 
         if (this->gnssFixEndNanos > CurrentSimNanos) {
-            // GNSS_FIX state: GNSS antenna (-X) points to zenith to maximize sky view.
             double minusXTargetHat[3] = {-earthHat_sc[0], -earthHat_sc[1], -earthHat_sc[2]};
             double gnssX_B[3] = {0.0, 0.0, 0.0};
             double gnssY_B[3] = {0.0, 0.0, 0.0};
@@ -363,7 +334,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
                 selectedState = "GNSS_FIX";
             }
         } else {
-            // EXPERIMENT base geometry when GNSS fix is not currently active.
             ActiveGuidanceMath::computeCompromiseX(earthHat_found, sunHat_found, this->rhoRad, x_B);
             std::vector<const double*> experimentExtras;
             if (hasMoonHat) {
@@ -439,7 +409,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
             this->lastVisibleStationLabel = hasVisibleStation ? visibleStation : "";
         }
     } else {
-        // GNSS fixing is only required during experiment context.
         this->gnssFixScheduleInitialized = false;
         this->nextGnssFixNanos = 0U;
         this->gnssFixEndNanos = 0U;
@@ -508,7 +477,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
     this->prevRollDeg = selectedRoll.rollDeg;
     this->hasPrevRoll = true;
 
-    // Reference DCM rows are inertial components of body axes [x_B; y_B; z_B].
     double dcm_RN[3][3] = {
         {x_B[0], x_B[1], x_B[2]},
         {selectedRoll.y_B[0], selectedRoll.y_B[1], selectedRoll.y_B[2]},
@@ -518,7 +486,6 @@ void ActiveGuidance::UpdateState(uint64_t CurrentSimNanos)
     double sigma_RN[3] = {0.0, 0.0, 0.0};
     C2MRP(dcm_RN, sigma_RN);
 
-    // Rare numerical guard for degenerate frame cases.
     bool sigmaValid = std::isfinite(sigma_RN[0]) && std::isfinite(sigma_RN[1]) && std::isfinite(sigma_RN[2]);
     if (!sigmaValid) {
         sigma_RN[0] = 0.0;
@@ -741,7 +708,6 @@ bool ActiveGuidance::selectVisibleGroundStation(const double scPos_N[3],
             kEarthRadiusM * sinLat
         };
 
-        // Approximate Earth-fixed station drift in inertial frame using a simple z-axis rotation.
         const double stationPos_N[3] = {
             cosTheta * stationPosEcef[0] - sinTheta * stationPosEcef[1],
             sinTheta * stationPosEcef[0] + cosTheta * stationPosEcef[1],
@@ -797,10 +763,7 @@ bool ActiveGuidance::selectVisibleGroundStation(const double scPos_N[3],
 
 void ActiveGuidance::refreshThresholds()
 {
-    // HYBRID hysteresis:
-    // - entering CHARGING is stricter (+2 deg)
-    // - exiting CHARGING is looser (-1 deg)
-    // This prevents rapid state toggling near boundaries.
+    // Hysteresis bands for CHARGING/EXPERIMENT transitions.
     this->chargeEnterClearDeg = this->lostExclHalfDeg + 2.0;                         // [deg]
     this->chargeExitClearDeg = std::max(this->lostExclHalfDeg - 1.0, 0.0);           // [deg]
     this->chargeEnterSunVisDeg = this->earthHalfAngleDeg + 2.0;                      // [deg]

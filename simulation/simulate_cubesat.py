@@ -33,9 +33,8 @@ from vizard_scene import (
     create_battery_storage_panel,
 )
 
-# HIL imports
 try:
-    from hil.hil_orchestrator import HilOrchestrator, create_hil_orchestrator
+    from hil.hil_orchestrator import create_hil_orchestrator
     HIL_AVAILABLE = True
 except ImportError:
     HIL_AVAILABLE = False
@@ -47,7 +46,8 @@ DEFAULT_BODY_X_M = 0.30
 DEFAULT_BODY_YZ_M = 0.10
 DEFAULT_LOST_FOV_DEG = 25.5
 DEFAULT_FOUND_FOV_DEG = 75.6
-DEFAULT_EXCLUSION_BUFFER_DEG = 10.0
+DEFAULT_LOST_EXCLUSION_BUFFER_DEG = 10.0
+DEFAULT_FOUND_EXCLUSION_BUFFER_DEG = 10.0
 DEFAULT_STATUS_PERIOD_SEC = 60.0
 DEFAULT_BIN_PATH = "./output.bin"
 DEFAULT_GUIDANCE_BACKEND = "EXTERNAL_CPP"
@@ -89,13 +89,11 @@ def _fit_exponential_convergence(time_hours, uptime_pct):
     if t.size < 3:
         return None
 
-    # Force non-negative time for stability.
     t = np.maximum(t, 0.0)
     max_t = float(np.max(t))
     if max_t <= 0.0:
         return None
 
-    # Wide c range so both short and long simulations can be fit.
     c_candidates = np.logspace(-4.0, 2.0, 220)
     best = None
     best_sse = np.inf
@@ -175,7 +173,6 @@ def _generate_uptime_plots(save_path, history):
             t_fit = np.linspace(max(0.0, float(np.min(t_hours[valid]))), max_t, 400)
             y_fit = fit_result["a"] + fit_result["b"] * np.exp(-fit_result["c"] * t_fit)
             y_fit = np.clip(y_fit, 0.0, 100.0)
-            # Fit approximates long-horizon behavior and gives a visible convergence trend.
             ax.plot(
                 t_fit,
                 y_fit,
@@ -199,12 +196,10 @@ def _generate_uptime_plots(save_path, history):
         ax.set_xlabel("Time [hours]")
         ax.set_ylabel("Availability [%]")
         if key.startswith("lost_"):
-            # LOST curves are typically high and tightly clustered, so zoom in.
             ax.set_ylim(95.0, 100.0)
         else:
             ax.set_ylim(60.0, 100.0)
         ax.set_xscale("symlog", linthresh=lin_thresh)
-        # Keep plot domain strictly non-negative so no negative-time ticks appear.
         ax.set_xlim(left=0.0, right=max(max_t, 1.0e-6))
         ax.grid(True, which="both", alpha=0.3)
 
@@ -525,7 +520,6 @@ class LiveTelemetryPlot:
 
         saved_paths = []
 
-        # Create EPS plots with log scale time
         fig, axes = plt.subplots(3, 1, figsize=(10.0, 8.0), sharex=True)
         fig.suptitle("EPS / Thermal Telemetry (Log Scale Time)")
 
@@ -595,10 +589,16 @@ def parse_cli_args():
         help="FOUND camera full FOV in degrees (default: 60).",
     )
     parser.add_argument(
-        "--exclusion-buffer",
+        "--lost-exclusion-buffer",
         type=float,
-        default=DEFAULT_EXCLUSION_BUFFER_DEG,
-        help="Exclusion cone buffer in degrees added to half-FOV (default: 10).",
+        default=DEFAULT_LOST_EXCLUSION_BUFFER_DEG,
+        help="LOST exclusion cone buffer in degrees added to half-FOV (default: 10).",
+    )
+    parser.add_argument(
+        "--found-exclusion-buffer",
+        type=float,
+        default=DEFAULT_FOUND_EXCLUSION_BUFFER_DEG,
+        help="FOUND exclusion cone buffer in degrees added to half-FOV (default: 10).",
     )
     parser.add_argument(
         "--status-period",
@@ -760,8 +760,10 @@ def parse_cli_args():
         parser.error("--body-x and --body-yz must be greater than 0")
     if args.lost_fov <= 0.0 or args.found_fov <= 0.0:
         parser.error("--lost-fov and --found-fov must be greater than 0")
-    if args.exclusion_buffer < 0.0:
-        parser.error("--exclusion-buffer must be >= 0")
+    if args.lost_exclusion_buffer < 0.0:
+        parser.error("--lost-exclusion-buffer must be >= 0")
+    if args.found_exclusion_buffer < 0.0:
+        parser.error("--found-exclusion-buffer must be >= 0")
     if args.status_period <= 0.0:
         parser.error("--status-period must be greater than 0")
     if args.gnss_fix_period <= 0.0:
@@ -904,7 +906,8 @@ def run_both_modes(args):
         "--body-yz", str(args.body_yz),
         "--lost-fov", str(args.lost_fov),
         "--found-fov", str(args.found_fov),
-        "--exclusion-buffer", str(args.exclusion_buffer),
+        "--lost-exclusion-buffer", str(args.lost_exclusion_buffer),
+        "--found-exclusion-buffer", str(args.found_exclusion_buffer),
         "--status-period", str(args.status_period),
         "--gnss-fix-period", str(args.gnss_fix_period),
         "--gnss-fix-duration", str(args.gnss_fix_duration),
@@ -928,30 +931,95 @@ def run_both_modes(args):
         raise SystemExit(max(return_codes))
     raise SystemExit(0)
 
-# mode for ADCS
-# - "ROLL_ONLY": keep -X on Sun (so +X FOUND faces away); roll to maximize LOST (+Z) sky clearance
-# - "EXPERIMENT": point FOUND (+X) toward Earth limb and try to roll for LOST (+Z) uptime
-# - "HYBRID": switch between CHARGING and experiment-context states automatically
-#   experiment-context priority: GNSS_FIX > DOWNLINK > EXPERIMENT
-# - "BOTH": spawn two subprocesses and run fixed ROLL_ONLY and fixed EXPERIMENT for comparison
+
+def _mrp_to_quaternion(attitude_mrp):
+    sigma = np.array(attitude_mrp, dtype=float)
+    sigma_squared = float(np.sum(sigma ** 2))
+    denominator = 1.0 + sigma_squared
+    q0 = (1.0 - sigma_squared) / denominator
+    q123 = 2.0 * sigma / denominator
+    return np.array([q0, q123[0], q123[1], q123[2]])
+
+
+def _build_hil_config(cli_args):
+    return {
+        "hil_enable": True,
+        "hil_role": cli_args.hil_role,
+        "hil_transport": cli_args.hil_transport,
+        "hil_bind_ip": cli_args.hil_bind_ip,
+        "hil_bind_port": cli_args.hil_bind_port,
+        "hil_peer_ip": cli_args.hil_peer_ip,
+        "hil_peer_port": cli_args.hil_peer_port,
+        "hil_cycle_ms": cli_args.hil_cycle_ms,
+        "hil_timeout_ms": cli_args.hil_timeout_ms,
+        "hil_hold_last_max_ms": cli_args.hil_hold_last_max_ms,
+    }
+
+
+def _initialize_hil_orchestrator(cli_args):
+    if not cli_args.hil_enable:
+        return None
+    if not HIL_AVAILABLE:
+        print("[HIL] ERROR: HIL modules not available. Install simulation/hil package.")
+        sys.exit(1)
+
+    print("[HIL] Initializing HIL orchestrator...")
+    hil_orchestrator = create_hil_orchestrator(_build_hil_config(cli_args))
+    if not hil_orchestrator.initialize():
+        print("[HIL] ERROR: Failed to initialize HIL orchestrator")
+        sys.exit(1)
+    if not hil_orchestrator.start():
+        print("[HIL] ERROR: Failed to start HIL orchestrator")
+        sys.exit(1)
+    print("[HIL] HIL orchestrator started successfully")
+    return hil_orchestrator
+
+
+def _update_hil_orchestrator(hil_orchestrator, sc_state_out_msg):
+    if hil_orchestrator is None:
+        return
+    try:
+        sc_state_now = sc_state_out_msg.read()
+        position = sc_state_now.r_BN_N
+        velocity = sc_state_now.v_BN_N
+        attitude_quat = _mrp_to_quaternion(sc_state_now.sigma_BN)
+        rate = sc_state_now.omega_BN_B
+        hil_orchestrator.send_truth_nav(position, velocity, attitude_quat, rate)
+
+        command = hil_orchestrator.get_command()
+        if command:
+            pass
+    except Exception as e:
+        print(f"[HIL] Warning: HIL integration error: {e}")
+
+
+def _shutdown_hil_orchestrator(hil_orchestrator):
+    if hil_orchestrator is None:
+        return
+    print("[HIL] Stopping HIL orchestrator...")
+    hil_orchestrator.stop()
+    stats = hil_orchestrator.get_statistics()
+    print("[HIL] HIL Statistics:")
+    print(f"[HIL]   Sequence TX: {stats.get('seq_tx', 0)}")
+    print(f"[HIL]   Sequence RX: {stats.get('seq_rx', 0)}")
+    print(f"[HIL]   Dropped frames: {stats.get('dropped_frames', 0)}")
+    print(f"[HIL]   Stale frames: {stats.get('stale_frames', 0)}")
+    print(f"[HIL]   Avg loop jitter: {stats.get('avg_loop_jitter_ms', 0):.2f} ms")
+    print(f"[HIL]   Avg loop latency: {stats.get('avg_loop_latency_ms', 0):.2f} ms")
+    print(f"[HIL]   Avg command age: {stats.get('avg_command_age_ms', 0):.2f} ms")
+    print(f"[HIL]   Watchdog trips: {stats.get('watchdog_trips', 0)}")
+
 ADCS_MODE = CLI_ARGS.mode
 
-# Backward-compatible rename: COMPROMISE -> EXPERIMENT.
 if ADCS_MODE == "COMPROMISE":
     ADCS_MODE = "EXPERIMENT"
 
 if ADCS_MODE == "BOTH":
     run_both_modes(CLI_ARGS)
 
-# simulation start time - used for sun estimate + SPICE
 SIM_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
 
-# body frame layout:
-#   +X = long rectangular side  → FOUND camera face
-#   +Z = square endcap face     → LOST camera face
-#   -X = opposite long side    → GNSS antenna
-#   +X = same long side as FOUND→ Comms antenna (below FOUND)
-# NOTE: keep CLI flag names for compatibility, but map dimensions to match the face layout above.
+# Body-frame layout: +X FOUND face, +Z LOST face, -X GNSS antenna, +X comms antenna.
 BODY_LONG_M = CLI_ARGS.body_x
 BODY_SIDE_M = CLI_ARGS.body_yz
 
@@ -962,34 +1030,27 @@ BODY_SIZE_X_M = BODY_SIZE_XY_M
 BODY_SIZE_Y_M = BODY_SIZE_XY_M
 FOUND_Z_OFFSET_FRAC = 0.35
 
-# sensor boresight vectors in body frame
 VEC_LOST_B  = [0, 0,  1]   # LOST points out +Z (square face)
 VEC_FOUND_B = [1, 0,  0]   # FOUND points out +X (long face)
 VEC_ANT_B   = [-1, 0,  0]   # GNSS antenna points out -X (opposite long side)
 VEC_COMMS_B = [1, 0, 0]  # Comms antenna points out +X (same face as FOUND)
 
-# sensor positions at center of each face
 POS_LOST_B  = [0.0, 0.0,  0.5 * BODY_SIZE_Z_M]
 POS_FOUND_B = [0.5 * BODY_SIZE_X_M, 0.0, FOUND_Z_OFFSET_FRAC * BODY_SIZE_Z_M]
 POS_ANT_B   = [-0.5 * BODY_SIZE_X_M, 0.0, 0.0]  # [m] -X long side
 POS_COMMS_B = [0.5 * BODY_SIZE_X_M, 0.0, 0.0]  # [m] same +X face as FOUND, lowered toward bus mid-height
 
-# camera FOVs (full angle) and derived half-angles
 LOST_FOV_DEG  = CLI_ARGS.lost_fov
 FOUND_FOV_DEG = CLI_ARGS.found_fov
 
 LOST_HALF_DEG  = LOST_FOV_DEG  / 2.0
 FOUND_HALF_DEG = FOUND_FOV_DEG / 2.0
-EXCLUSION_BUFFER_DEG = CLI_ARGS.exclusion_buffer
 
-# exclusion cones are a bit wider than the strict FOV as a safety margin
-LOST_EXCL_HALF_DEG  = LOST_HALF_DEG  + EXCLUSION_BUFFER_DEG
-FOUND_EXCL_HALF_DEG = FOUND_HALF_DEG + EXCLUSION_BUFFER_DEG
+LOST_EXCL_HALF_DEG  = LOST_HALF_DEG  + CLI_ARGS.lost_exclusion_buffer
+FOUND_EXCL_HALF_DEG = FOUND_HALF_DEG + CLI_ARGS.found_exclusion_buffer
 
 SIM_HOURS = CLI_ARGS.hours
 
-# pre-compute initial attitude so the controller starts near the target
-# and never has to traverse a large MRP arc at t=0 (that would spike the torque)
 sun_hat = approx_sun_hat_from_epoch(SIM_EPOCH_UTC)
 
 mu_init = 3.986004415e14
@@ -1008,7 +1069,6 @@ elif ADCS_MODE == "EXPERIMENT":
     x_B_init = compute_compromise_x(earth_hat_init, sun_hat, rho_rad)
     init_state = "EXPERIMENT"
 else:
-    # HYBRID and BOTH startup: choose CHARGING only when roll-only has healthy LOST clearance.
     charge_enter_clear_deg = LOST_EXCL_HALF_DEG + 2.0
     earth_half_angle_deg = np.degrees(np.arcsin(6371.0 / (6371.0 + 400.0)))
     charge_enter_sun_vis_deg = earth_half_angle_deg + 2.0
@@ -1032,7 +1092,6 @@ scSim       = SimulationBaseClass.SimBaseClass()
 simTaskName = "dynamicsTask"
 dynProcess  = scSim.CreateNewProcess("dynamicsProcess")
 
-# 0.5 s timestep: ω_n*dt = 0.707*0.5 = 0.35 << π  (stable)
 dynProcess.addTask(scSim.CreateNewTask(simTaskName, macros.sec2nano(0.5)))
 
 if REALTIME_ENABLED:
@@ -1090,7 +1149,6 @@ guidance = _create_guidance_module(
 guidance.ModelTag = "activeGuidance"
 guidance.scStateInMsg.subscribeTo(scObject.scStateOutMsg)
 
-# wire up the SPICE Sun message so guidance gets a real-time Sun direction
 sun_index = 1
 moon_index = 2
 if hasattr(gravFactory, "spicePlanetNames"):
@@ -1110,7 +1168,6 @@ scSim.AddModelToTask(simTaskName, attErr)
 attErr.attNavInMsg.subscribeTo(sNav.attOutMsg)
 attErr.attRefInMsg.subscribeTo(guidance.attRefOutMsg)
 
-# MRP PD gains: K=0.05, P=0.3 give ω_n = 0.707 rad/s, ζ ≈ 2.1 (overdamped), stable at 0.5 s
 mrpControl          = mrpPD.mrpPD()
 mrpControl.ModelTag = "mrpPD"
 mrpControl.K        = 0.05
@@ -1202,7 +1259,6 @@ if save_dir:
 if os.path.exists(save_path):
     os.remove(save_path)  # clear old run so Vizard doesn't load stale data
 
-# Vizard bootstrap is handled in one helper so this file can stay focused on sim logic.
 viz = enable_vizard(
     scSim,
     simTaskName,
@@ -1214,7 +1270,6 @@ viz = enable_vizard(
 )
 live_telemetry_plot = LiveTelemetryPlot(enabled=LIVE_PLOTS_ENABLED, compression_power=0.5)  # [-]
 
-# Pre-build both visual variants once (OPEN/CLOSED) and hot-swap them during runtime.
 models_dir = os.path.join(os.getcwd(), "models")
 os.makedirs(models_dir, exist_ok=True)
 obj_path_open = os.path.join(models_dir, f"cubesat_{ADCS_MODE}_open.obj")
@@ -1239,7 +1294,6 @@ initial_visual_path = obj_path_open if initial_visual_state == "OPEN" else obj_p
 apply_visual_model(viz, scObject.ModelTag, initial_visual_path)
 print(f"Visual model: panels={initial_visual_state} (based on initial ADCS state={init_state})")
 
-# Add all cones/lines/cameras used to interpret LOST and FOUND geometry.
 add_vizard_scene_overlays(
     viz,
     spacecraft_tag=scObject.ModelTag,
@@ -1275,38 +1329,7 @@ for station_spec in CLI_ARGS.ground_station:
     print(f"  - {station_spec}")
 scSim.InitializeSimulation()
 
-# HIL initialization
-hil_orchestrator = None
-if CLI_ARGS.hil_enable:
-    if not HIL_AVAILABLE:
-        print("[HIL] ERROR: HIL modules not available. Install simulation/hil package.")
-        sys.exit(1)
-
-    print("[HIL] Initializing HIL orchestrator...")
-    hil_config = {
-        'hil_enable': True,
-        'hil_role': CLI_ARGS.hil_role,
-        'hil_transport': CLI_ARGS.hil_transport,
-        'hil_bind_ip': CLI_ARGS.hil_bind_ip,
-        'hil_bind_port': CLI_ARGS.hil_bind_port,
-        'hil_peer_ip': CLI_ARGS.hil_peer_ip,
-        'hil_peer_port': CLI_ARGS.hil_peer_port,
-        'hil_cycle_ms': CLI_ARGS.hil_cycle_ms,
-        'hil_timeout_ms': CLI_ARGS.hil_timeout_ms,
-        'hil_hold_last_max_ms': CLI_ARGS.hil_hold_last_max_ms,
-    }
-
-    hil_orchestrator = create_hil_orchestrator(hil_config)
-
-    if not hil_orchestrator.initialize():
-        print("[HIL] ERROR: Failed to initialize HIL orchestrator")
-        sys.exit(1)
-
-    if not hil_orchestrator.start():
-        print("[HIL] ERROR: Failed to start HIL orchestrator")
-        sys.exit(1)
-
-    print("[HIL] HIL orchestrator started successfully")
+hil_orchestrator = _initialize_hil_orchestrator(CLI_ARGS)
 
 stop_time_nanos = macros.hour2nano(SIM_HOURS)
 visual_update_step_nanos = macros.sec2nano(1.0)
@@ -1316,7 +1339,6 @@ current_visual_state = None
 last_reported_state = None
 last_reported_station = "NONE"
 
-# Live telemetry from the Basilisk power and thermal modules.
 telemetry_soc_pct = 100.0 * battery_initial_charge_whr / battery_capacity_whr  # [%]
 telemetry_temp_c = sensor_initial_temp_c  # [C]
 telemetry_net_power_w = 0.0  # [W]
@@ -1397,12 +1419,10 @@ uptime_history = {
     "found_downlink_pct": [],
 }
 
-# Step in chunks instead of one long run: this gives us model swaps and uptime sampling hooks.
 while next_stop_nanos < stop_time_nanos:
     previous_stop_nanos = next_stop_nanos
     next_stop_nanos = min(next_stop_nanos + visual_update_step_nanos, stop_time_nanos)
 
-    # CHARGING mode sheds payload load to let the battery recover.
     commanded_state = _get_guidance_state(guidance)
     payload_is_on = commanded_state != "CHARGING"
     payload_power_status = 1 if payload_is_on else 0
@@ -1412,39 +1432,8 @@ while next_stop_nanos < stop_time_nanos:
     scSim.ConfigureStopTime(next_stop_nanos)
     scSim.ExecuteSimulation()
 
-    # HIL integration: send truth data and receive commands
-    if CLI_ARGS.hil_enable and hil_orchestrator:
-        try:
-            sc_state_now = scObject.scStateOutMsg.read()
-
-            # Send truth navigation data to BBB
-            position = sc_state_now.r_BN_N
-            velocity = sc_state_now.v_BN_N
-            attitude_mrp = sc_state_now.sigma_BN
-            rate = sc_state_now.omega_BN_B
-
-            # Convert MRP to quaternion for HIL
-            # MRP to quaternion conversion: q = [q0, q1, q2, q3]
-            # where q0 = (1 - sigma^2) / (1 + sigma^2)
-            # and q1:3 = 2 * sigma / (1 + sigma^2)
-            sigma_squared = np.sum(np.array(attitude_mrp) ** 2)
-            denominator = 1.0 + sigma_squared
-            q0 = (1.0 - sigma_squared) / denominator
-            q123 = 2.0 * np.array(attitude_mrp) / denominator
-            attitude_quat = np.array([q0, q123[0], q123[1], q123[2]])
-
-            hil_orchestrator.send_truth_nav(
-                position, velocity, attitude_quat, rate
-            )
-
-            # Get command from BBB (if available)
-            command = hil_orchestrator.get_command()
-            if command:
-                # Apply command to simulation (placeholder for actual command application)
-                pass
-
-        except Exception as e:
-            print(f"[HIL] Warning: HIL integration error: {e}")
+    if CLI_ARGS.hil_enable:
+        _update_hil_orchestrator(hil_orchestrator, scObject.scStateOutMsg)
 
     dt_nanos = next_stop_nanos - previous_stop_nanos
     if dt_nanos > 0:
@@ -1461,10 +1450,9 @@ while next_stop_nanos < stop_time_nanos:
                 vec_found_b=VEC_FOUND_B,
                 pos_lost_b=POS_LOST_B,
                 pos_found_b=POS_FOUND_B,
-                # Uptime is tied to INNER red cone validity, not outer orange buffers.
-                lost_inner_keepout_half_deg=LOST_HALF_DEG,
-                found_earth_keepin_half_deg=FOUND_HALF_DEG,
-                found_sun_keepout_half_deg=FOUND_HALF_DEG,
+                lost_inner_keepout_half_deg=LOST_EXCL_HALF_DEG,
+                found_earth_keepin_half_deg=FOUND_EXCL_HALF_DEG,
+                found_sun_keepout_half_deg=FOUND_EXCL_HALF_DEG,
                 return_details=True,
             )
             if lost_ok:
@@ -1472,7 +1460,6 @@ while next_stop_nanos < stop_time_nanos:
             if found_ok:
                 found_uptime_nanos += dt_nanos
 
-            # Track per-state uptime so CHARGING and EXPERIMENT performance are visible separately.
             sample_state = _get_guidance_state(guidance)
             if sample_state not in STATE_NAMES:
                 if ADCS_MODE == "ROLL_ONLY":
@@ -1499,9 +1486,9 @@ while next_stop_nanos < stop_time_nanos:
 
                 found_earth_visible = (
                     uptime_details["found_earth_ang_deg"]
-                    <= (FOUND_HALF_DEG + uptime_details["earth_half_angle_deg"])
+                    <= (FOUND_EXCL_HALF_DEG + uptime_details["earth_half_angle_deg"])
                 )
-                found_sun_clear = uptime_details["found_sun_ang_deg"] >= FOUND_HALF_DEG
+                found_sun_clear = uptime_details["found_sun_ang_deg"] >= FOUND_EXCL_HALF_DEG
                 if not found_earth_visible:
                     found_charging_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
                 if not found_sun_clear:
@@ -1518,9 +1505,9 @@ while next_stop_nanos < stop_time_nanos:
 
                 found_earth_visible = (
                     uptime_details["found_earth_ang_deg"]
-                    <= (FOUND_HALF_DEG + uptime_details["earth_half_angle_deg"])
+                    <= (FOUND_EXCL_HALF_DEG + uptime_details["earth_half_angle_deg"])
                 )
-                found_sun_clear = uptime_details["found_sun_ang_deg"] >= FOUND_HALF_DEG
+                found_sun_clear = uptime_details["found_sun_ang_deg"] >= FOUND_EXCL_HALF_DEG
                 if not found_earth_visible:
                     found_experiment_fail_nanos_by_reason["earth_not_visible"] += dt_nanos
                 if not found_sun_clear:
@@ -1547,7 +1534,6 @@ while next_stop_nanos < stop_time_nanos:
                 print(f"[UPTIME] sample evaluation warning: {exc}")
                 uptime_warning_printed = True
 
-        # Append cumulative uptime traces to visualize convergence over elapsed mission time.
         time_hours = next_stop_nanos * 1.0e-9 / 3600.0
         uptime_history["time_hours"].append(time_hours)
 
@@ -1607,7 +1593,6 @@ while next_stop_nanos < stop_time_nanos:
         uptime_history["lost_downlink_pct"].append(downlink_lost_pct)
         uptime_history["found_downlink_pct"].append(downlink_found_pct)
 
-    # Visual state mirrors guidance mode: OPEN panels while charging, hidden panels otherwise.
     active_state = _get_guidance_state(guidance)
     active_station = _get_active_ground_station(guidance)
     state_changed = active_state != last_reported_state
@@ -1823,7 +1808,6 @@ csv_path = _write_uptime_points_csv(save_path, uptime_history)
 if END_OF_RUN_PLOTS_ENABLED:
     print(f"[PLOT] Wrote uptime points CSV: {csv_path}")
 
-# Save EPS telemetry plots at the end
 eps_plot_paths = live_telemetry_plot.save_eps_plots(save_path)
 if eps_plot_paths:
     print("[PLOT] Wrote EPS telemetry plots:")
@@ -1845,21 +1829,7 @@ txt_path = _write_uptime_summary_txt(
 )
 print(f"[SUMMARY] Wrote uptime summary TXT: {txt_path}")
 
-# HIL cleanup
-if CLI_ARGS.hil_enable and hil_orchestrator:
-    print("[HIL] Stopping HIL orchestrator...")
-    hil_orchestrator.stop()
-
-    # Print HIL statistics
-    stats = hil_orchestrator.get_statistics()
-    print("[HIL] HIL Statistics:")
-    print(f"[HIL]   Sequence TX: {stats.get('seq_tx', 0)}")
-    print(f"[HIL]   Sequence RX: {stats.get('seq_rx', 0)}")
-    print(f"[HIL]   Dropped frames: {stats.get('dropped_frames', 0)}")
-    print(f"[HIL]   Stale frames: {stats.get('stale_frames', 0)}")
-    print(f"[HIL]   Avg loop jitter: {stats.get('avg_loop_jitter_ms', 0):.2f} ms")
-    print(f"[HIL]   Avg loop latency: {stats.get('avg_loop_latency_ms', 0):.2f} ms")
-    print(f"[HIL]   Avg command age: {stats.get('avg_command_age_ms', 0):.2f} ms")
-    print(f"[HIL]   Watchdog trips: {stats.get('watchdog_trips', 0)}")
+if CLI_ARGS.hil_enable:
+    _shutdown_hil_orchestrator(hil_orchestrator)
 
 print(f"Done! Load {save_path} in Vizard.")
