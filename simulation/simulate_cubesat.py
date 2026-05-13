@@ -51,6 +51,7 @@ DEFAULT_FOUND_EXCLUSION_BUFFER_DEG = 10.0
 DEFAULT_STATUS_PERIOD_SEC = 60.0
 DEFAULT_BIN_PATH = "./output.bin"
 DEFAULT_GUIDANCE_BACKEND = "EXTERNAL_CPP"
+DEFAULT_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
 DEFAULT_GNSS_FIX_PERIOD_SEC = 600.0
 DEFAULT_GNSS_FIX_DURATION_SEC = 60.0
 DEFAULT_GNSS_ZENITH_HALF_ANGLE_DEG = 45.0
@@ -659,6 +660,12 @@ def parse_cli_args():
         help="Output .bin path (including filename). Default: ./output.bin",
     )
     parser.add_argument(
+        "--epoch-utc",
+        type=str,
+        default=DEFAULT_EPOCH_UTC,
+        help="Simulation epoch in UTC ISO-8601 (default: 2026-01-01T12:00:00.000Z).",
+    )
+    parser.add_argument(
         "--enable-plots",
         action="store_true",
         default=True,
@@ -915,6 +922,7 @@ def run_both_modes(args):
         "--gnss-dead-reckoning", str(args.gnss_dead_reckoning),
         "--downlink-window", str(args.downlink_window),
         "--guidance-backend", str(args.guidance_backend),
+        "--epoch-utc", str(args.epoch_utc),
     ]
     for station_spec in args.ground_station:
         shared.extend(["--ground-station", station_spec])
@@ -1017,7 +1025,7 @@ if ADCS_MODE == "COMPROMISE":
 if ADCS_MODE == "BOTH":
     run_both_modes(CLI_ARGS)
 
-SIM_EPOCH_UTC = "2026-01-01T12:00:00.000Z"
+SIM_EPOCH_UTC = CLI_ARGS.epoch_utc
 
 # Body-frame layout: +X FOUND face, +Z LOST face, -X GNSS antenna, +X comms antenna.
 BODY_LONG_M = CLI_ARGS.body_x

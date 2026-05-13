@@ -13,6 +13,7 @@ FOUND_FOV=75.6
 LOST_EXCLUSION_BUFFER=10.0
 FOUND_EXCLUSION_BUFFER=10.0
 OUTPUT_PATH=""
+EPOCH_UTC=""
 
 usage() {
   cat <<'EOF'
@@ -28,6 +29,7 @@ Options:
   --lost-exclusion-buffer <deg> LOST exclusion cone buffer in degrees added to half-FOV (default: 10.0)
   --found-exclusion-buffer <deg> FOUND exclusion cone buffer in degrees added to half-FOV (default: 10.0)
   --output <path>        Custom output .bin file path (default: simulation/output_<hours>h.bin)
+  --epoch-utc <iso>      Simulation epoch UTC in ISO-8601 (example: 2026-01-01T00:00:00.000Z)
 
 Notes:
   - If no argument is provided, the default is 1 hour.
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output)
       OUTPUT_PATH="$2"
+      shift 2
+      ;;
+    --epoch-utc)
+      EPOCH_UTC="$2"
       shift 2
       ;;
     -h|--help|help)
@@ -141,6 +147,10 @@ fi
 
 echo "[RUN] Running HuskySat simulation for ${HOURS} hour(s) in mode ${MODE}"
 cd "${SIM_DIR}"
+EPOCH_ARGS=()
+if [[ -n "${EPOCH_UTC}" ]]; then
+  EPOCH_ARGS=(--epoch-utc "${EPOCH_UTC}")
+fi
 if [[ "${ENABLE_LIVE_EPS_PLOTS}" == "1" ]]; then
   PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
     "${PYTHON_BIN}" "${SIM_DIR}/simulate_cubesat.py" \
@@ -152,6 +162,7 @@ if [[ "${ENABLE_LIVE_EPS_PLOTS}" == "1" ]]; then
     --lost-exclusion-buffer "${LOST_EXCLUSION_BUFFER}" \
     --found-exclusion-buffer "${FOUND_EXCLUSION_BUFFER}" \
     --bin-path "${SIM_BIN_PATH}" \
+    "${EPOCH_ARGS[@]}" \
     --enable-live-eps-plots
 else
   PYTHONPATH="${BSK_ROOT}/dist3${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -163,7 +174,8 @@ else
     --found-fov "${FOUND_FOV}" \
     --lost-exclusion-buffer "${LOST_EXCLUSION_BUFFER}" \
     --found-exclusion-buffer "${FOUND_EXCLUSION_BUFFER}" \
-    --bin-path "${SIM_BIN_PATH}"
+    --bin-path "${SIM_BIN_PATH}" \
+    "${EPOCH_ARGS[@]}"
 fi
 
 if [[ "${RUN_KIND}" == "test" ]]; then
